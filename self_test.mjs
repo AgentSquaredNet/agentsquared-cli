@@ -27,6 +27,7 @@ import { detectHostRuntimeEnvironment, parseOpenClawTaskResult } from './adapter
 import { buildOpenClawConversationSummaryPrompt, buildOpenClawLocalSkillInventoryPrompt, buildOpenClawOutboundSkillDecisionPrompt, buildOpenClawSafetyPrompt, buildOpenClawTaskPrompt, parseOpenClawConversationSummaryResult, parseOpenClawLocalSkillInventoryResult, resolveOpenClawOutboundSkillHint } from './adapters/openclaw/adapter.mjs'
 import { detectOpenClawHostEnvironment, resolveOpenClawAgentSelection } from './adapters/openclaw/detect.mjs'
 import { withOpenClawGatewayClient } from './adapters/openclaw/ws_client.mjs'
+import { runA2Cli } from './a2_cli.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const ROOT = path.dirname(__filename)
@@ -108,6 +109,31 @@ async function main() {
       '/dns4/relay.agentsquared.net/tcp/4051/p2p/peer4/p2p-circuit'
     ]
   )
+  {
+    const captured = []
+    const originalLog = console.log
+    console.log = (...args) => {
+      captured.push(args.join(' '))
+    }
+    try {
+      await runA2Cli(['help'])
+    } finally {
+      console.log = originalLog
+    }
+    const help = captured.join('\n')
+    assert.match(help, /a2_cli host detect/)
+    assert.match(help, /a2_cli onboard/)
+    assert.match(help, /a2_cli local inspect/)
+    assert.match(help, /a2_cli gateway start/)
+    assert.match(help, /a2_cli gateway health/)
+    assert.match(help, /a2_cli gateway restart/)
+    assert.match(help, /a2_cli friend list/)
+    assert.match(help, /a2_cli friend msg/)
+    assert.match(help, /a2_cli inbox show/)
+    assert.doesNotMatch(help, /relay agent-card get/)
+    assert.doesNotMatch(help, /learning start/)
+    assert.doesNotMatch(help, /message send/)
+  }
 
   const protocol = '/agentsquared/test/1.0'
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsquared-gateway-test-'))

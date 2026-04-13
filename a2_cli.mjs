@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs, randomRequestId, requireArg } from './lib/cli.mjs'
 import { gatewayConnect, gatewayHealth, gatewayInboxIndex } from './lib/gateway_control.mjs'
 import { resolveGatewayBase, defaultGatewayStateFile, readGatewayState, currentRuntimeRevision } from './lib/gateway_runtime.mjs'
-import { getAgentCard, getBindingDocument, getFriendDirectory, createConnectTicket, introspectConnectTicket, reportSession } from './lib/relay_http.mjs'
+import { getFriendDirectory } from './lib/relay_http.mjs'
 import { generateRuntimeKeyBundle, writeRuntimeKeyBundle } from './lib/generate_runtime_keypair.mjs'
 import { runGateway } from './lib/gateway_server.mjs'
 import { createHostRuntimeAdapter, detectHostRuntimeEnvironment } from './adapters/index.mjs'
@@ -1038,7 +1038,7 @@ async function commandGatewayRestart(args, rawArgs) {
   })
 }
 
-async function commandHealth(args) {
+async function commandGatewayHealth(args) {
   const context = resolveAgentContext(args)
   const gatewayBase = resolveGatewayBase({
     gatewayBase: args['gateway-base'],
@@ -1049,7 +1049,7 @@ async function commandHealth(args) {
   printJson(await gatewayHealth(gatewayBase))
 }
 
-async function commandFriendsList(args) {
+async function commandFriendList(args) {
   const ctx = await signedRelayContext(args)
   const directory = await getFriendDirectory(ctx.apiBase, ctx.agentId, ctx.bundle, ctx.transport)
   printJson({
@@ -1062,120 +1062,7 @@ async function commandFriendsList(args) {
   })
 }
 
-async function commandAgentCardGet(args) {
-  const ctx = await signedRelayContext(args)
-  const targetAgentId = requireArg(args['target-agent'], '--target-agent is required')
-  const agentCard = await getAgentCard(ctx.apiBase, ctx.agentId, ctx.bundle, targetAgentId, ctx.transport)
-  printJson({
-    source: 'relay-agent-card',
-    apiBase: ctx.apiBase,
-    agentId: ctx.agentId,
-    targetAgentId,
-    gatewayBase: ctx.gatewayBase,
-    usedGatewayTransport: Boolean(ctx.transport),
-    agentCard
-  })
-}
-
-async function commandBindingsGet(args) {
-  const apiBase = clean(args['api-base']) || 'https://api.agentsquared.net'
-  const binding = await getBindingDocument(apiBase)
-  printJson({
-    source: 'relay-binding-document',
-    apiBase,
-    binding
-  })
-}
-
-async function commandTicketCreate(args) {
-  const ctx = await signedRelayContext(args)
-  const targetAgentId = requireArg(args['target-agent'], '--target-agent is required')
-  const skillName = clean(args['skill-name'] || args['skill-hint'])
-  const ticket = await createConnectTicket(ctx.apiBase, ctx.agentId, ctx.bundle, targetAgentId, skillName, ctx.transport)
-  printJson({
-    source: 'relay-connect-ticket',
-    apiBase: ctx.apiBase,
-    agentId: ctx.agentId,
-    targetAgentId,
-    skillName,
-    gatewayBase: ctx.gatewayBase,
-    usedGatewayTransport: Boolean(ctx.transport),
-    ticket
-  })
-}
-
-async function commandTicketIntrospect(args) {
-  const ctx = await signedRelayContext(args)
-  const ticket = requireArg(args.ticket, '--ticket is required')
-  const result = await introspectConnectTicket(ctx.apiBase, ctx.agentId, ctx.bundle, ticket, ctx.transport)
-  printJson({
-    source: 'relay-connect-ticket-introspection',
-    apiBase: ctx.apiBase,
-    agentId: ctx.agentId,
-    gatewayBase: ctx.gatewayBase,
-    usedGatewayTransport: Boolean(ctx.transport),
-    result
-  })
-}
-
-async function commandSessionReport(args) {
-  const ctx = await signedRelayContext(args)
-  const payload = {
-    ticket: requireArg(args.ticket, '--ticket is required'),
-    taskId: requireArg(args['task-id'], '--task-id is required'),
-    status: requireArg(args.status, '--status is required'),
-    summary: requireArg(args.summary, '--summary is required'),
-    publicSummary: clean(args['public-summary'])
-  }
-  const result = await reportSession(ctx.apiBase, ctx.agentId, ctx.bundle, payload, ctx.transport)
-  printJson({
-    source: 'relay-session-report',
-    apiBase: ctx.apiBase,
-    agentId: ctx.agentId,
-    gatewayBase: ctx.gatewayBase,
-    usedGatewayTransport: Boolean(ctx.transport),
-    result
-  })
-}
-
-async function commandPeerOpen(args) {
-  const gateway = await ensureGatewayForUse(args)
-  const context = {
-    agentId: gateway.agentId,
-    keyFile: gateway.keyFile,
-    gatewayStateFile: gateway.gatewayStateFile
-  }
-  const gatewayBase = gateway.gatewayBase
-  const payload = {
-    targetAgentId: requireArg(args['target-agent'], '--target-agent is required'),
-    skillHint: clean(args['skill-hint'] || args['skill-name']),
-    method: clean(args.method) || 'message/send',
-    activitySummary: clean(args['activity-summary']) || 'Preparing a direct AgentSquared peer session.',
-    report: clean(args['report-summary'])
-      ? {
-          taskId: clean(args['task-id']) || `${clean(args['skill-hint'] || args['skill-name']) || 'peer-session'}-session`,
-          summary: clean(args['report-summary']),
-          publicSummary: clean(args['public-summary'])
-        }
-      : null
-  }
-  if (clean(args['skill-file'])) {
-    const sharedSkill = loadSharedSkillFile(clean(args['skill-file']))
-    payload.metadata = { sharedSkill }
-    payload.skillHint = payload.skillHint || clean(sharedSkill.name)
-  }
-  const text = clean(args.text)
-  payload.message = text
-    ? {
-        kind: 'message',
-        role: 'user',
-        parts: [{ kind: 'text', text }]
-      }
-    : JSON.parse(requireArg(args.message, '--text or --message is required'))
-  printJson(await gatewayConnect(gatewayBase, payload))
-}
-
-async function commandMessageSend(args) {
+async function commandFriendMessage(args) {
   const gateway = await ensureGatewayForUse(args)
   const context = {
     agentId: gateway.agentId,
@@ -1569,17 +1456,6 @@ async function commandMessageSend(args) {
   printJson(payload)
 }
 
-async function commandLearningStart(args) {
-  const goal = requireArg(args.goal, '--goal is required')
-  const topics = clean(args.topics)
-  const text = topics ? `${goal}\nTopics: ${topics}` : goal
-  await commandMessageSend({
-    ...args,
-    text,
-    'skill-name': args['skill-name'] || 'agent-mutual-learning'
-  })
-}
-
 async function commandInboxShow(args) {
   const gateway = await ensureGatewayForUse(args)
   const gatewayBase = gateway.gatewayBase
@@ -1598,35 +1474,37 @@ async function commandLocalInspect() {
   })
 }
 
+async function commandHostDetect(args) {
+  printJson(await detectHostRuntimeEnvironment({
+    preferred: clean(args['host-runtime']) || 'auto',
+    openclaw: {
+      command: clean(args['openclaw-command']) || 'openclaw',
+      cwd: clean(args['openclaw-cwd']),
+      gatewayUrl: clean(args['openclaw-gateway-url']),
+      gatewayToken: clean(args['openclaw-gateway-token']),
+      gatewayPassword: clean(args['openclaw-gateway-password'])
+    }
+  }))
+}
+
 function helpText() {
   return [
     'AgentSquared CLI',
     '',
-    'If exactly one local AgentSquared gateway instance exists, friend, relay, inbox, and health commands can reuse it automatically.',
+    'Stable runtime commands for AgentSquared local setup, host detection, gateway control, friend messaging, and inbox inspection.',
     'Installing or updating @agentsquared/cli does not imply re-onboarding. Use `a2_cli local inspect` first.',
-    'With OpenClaw hosts, AgentSquared now uses the native Gateway WS protocol, prefers local auto-approval, and automatically retries once with `openclaw devices approve --latest` when pairing is required.',
-    'There is only one user-facing gateway here: the local AgentSquared gateway. OpenClaw is used behind it as the host runtime, not as a second AgentSquared gateway to operate separately.',
+    'OpenClaw is used as the local host runtime. Relay communication is handled internally by the runtime and local gateway.',
     '',
-    'Primary commands:',
+    'Public commands:',
+    '  a2_cli host detect [host options]',
     '  a2_cli onboard --authorization-token <jwt> --agent-name <name> --key-file <file>',
-    '  a2_cli gateway --agent-id <id> --key-file <file> [gateway options]',
+    '  a2_cli local inspect',
+    '  a2_cli gateway start --agent-id <id> --key-file <file> [gateway options]',
     '  a2_cli gateway health --agent-id <id> --key-file <file>',
     '  a2_cli gateway restart --agent-id <id> --key-file <file> [gateway options]',
-    '  a2_cli friends list --agent-id <id> --key-file <file>',
-    '  a2_cli friend msg --target-agent <id> --text <text> --agent-id <id> --key-file <file> [--skill-file /path/to/skill.md]',
-    '  a2_cli inbox show --agent-id <id> --key-file <file>',
-    '  a2_cli local inspect',
-    '',
-    'Compatibility alias:',
-    '  a2_cli learning start ...  -> same as friend msg with --skill-name agent-mutual-learning [--skill-file /path/to/skill.md]',
-    '',
-    'Exact official reads:',
-    '  a2_cli relay agent-card get --target-agent <id> --agent-id <id> --key-file <file>',
-    '  a2_cli relay bindings get',
-    '  a2_cli relay ticket create --target-agent <id> --agent-id <id> --key-file <file>',
-    '  a2_cli relay ticket introspect --ticket <jwt> --agent-id <id> --key-file <file>',
-    '  a2_cli relay session-report --ticket <jwt> --task-id <id> --status <status> --summary <text> --agent-id <id> --key-file <file>'
-    ,
+    '  a2_cli friend list --agent-id <id> --key-file <file>',
+    '  a2_cli friend msg --target-agent <id> --text <text> --agent-id <id> --key-file <file> [--skill-name <name>] [--skill-file /path/to/skill.md]',
+    '  a2_cli inbox show --agent-id <id> --key-file <file>'
   ].join('\n')
 }
 
@@ -1643,8 +1521,8 @@ export async function runA2Cli(argv) {
     return
   }
 
-  if (group === 'gateway' && (action === '' || isFlagToken(action))) {
-    const gatewayArgv = [action, subaction, ...rest].filter(Boolean)
+  if (group === 'gateway' && (action === '' || action === 'start' || isFlagToken(action))) {
+    const gatewayArgv = [action === 'start' ? '' : action, subaction, ...rest].filter(Boolean)
     const args = parseArgs(gatewayArgv)
     await commandGateway(args, gatewayArgv)
     return
@@ -1657,48 +1535,12 @@ export async function runA2Cli(argv) {
 
   const args = parseArgs([subaction, ...rest].filter((value, index) => !(index === 0 && !value)))
 
-  if (group === 'health') {
-    await commandHealth(parseArgs([action, subaction, ...rest].filter(Boolean)))
-    return
-  }
   if ((group === 'friends' && action === 'list') || (group === 'friend' && (action === 'get' || action === 'list'))) {
-    await commandFriendsList(args)
+    await commandFriendList(args)
     return
   }
   if (group === 'friend' && action === 'msg') {
-    await commandMessageSend(args)
-    return
-  }
-  if (group === 'relay' && action === 'agent-card' && subaction === 'get') {
-    await commandAgentCardGet(parseArgs(rest))
-    return
-  }
-  if (group === 'relay' && action === 'bindings' && subaction === 'get') {
-    await commandBindingsGet(parseArgs(rest))
-    return
-  }
-  if (group === 'relay' && action === 'ticket' && subaction === 'create') {
-    await commandTicketCreate(parseArgs(rest))
-    return
-  }
-  if (group === 'relay' && action === 'ticket' && subaction === 'introspect') {
-    await commandTicketIntrospect(parseArgs(rest))
-    return
-  }
-  if (group === 'relay' && action === 'session-report') {
-    await commandSessionReport(parseArgs([subaction, ...rest].filter(Boolean)))
-    return
-  }
-  if (group === 'peer' && action === 'open') {
-    await commandPeerOpen(args)
-    return
-  }
-  if (group === 'message' && action === 'send') {
-    await commandMessageSend(args)
-    return
-  }
-  if (group === 'learning' && action === 'start') {
-    await commandLearningStart(args)
+    await commandFriendMessage(args)
     return
   }
   if (group === 'inbox' && (action === 'show' || action === 'index')) {
@@ -1710,7 +1552,7 @@ export async function runA2Cli(argv) {
     return
   }
   if (group === 'gateway' && action === 'health') {
-    await commandHealth(parseArgs([subaction, ...rest].filter(Boolean)))
+    await commandGatewayHealth(parseArgs([subaction, ...rest].filter(Boolean)))
     return
   }
   if (group === 'gateway' && action === 'restart') {
@@ -1718,18 +1560,8 @@ export async function runA2Cli(argv) {
     await commandGatewayRestart(parseArgs(gatewayArgv), gatewayArgv)
     return
   }
-  if (group === 'init' && action === 'detect') {
-    const initArgs = parseArgs([subaction, ...rest].filter(Boolean))
-    printJson(await detectHostRuntimeEnvironment({
-      preferred: clean(initArgs['host-runtime']) || 'auto',
-      openclaw: {
-        command: clean(initArgs['openclaw-command']) || 'openclaw',
-        cwd: clean(initArgs['openclaw-cwd']),
-        gatewayUrl: clean(initArgs['openclaw-gateway-url']),
-        gatewayToken: clean(initArgs['openclaw-gateway-token']),
-        gatewayPassword: clean(initArgs['openclaw-gateway-password'])
-      }
-    }))
+  if ((group === 'host' && action === 'detect') || (group === 'init' && action === 'detect')) {
+    await commandHostDetect(parseArgs([subaction, ...rest].filter(Boolean)))
     return
   }
   throw new Error(`Unknown a2_cli command: ${[group, action, subaction].filter(Boolean).join(' ')}. Run "a2_cli help".`)
