@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 
-import { parseAgentSquaredOutboundEnvelope, renderOwnerFacingReport } from '../../lib/a2_message_templates.mjs'
-import { PLATFORM_MAX_TURNS, normalizeConversationControl, resolveSkillMaxTurns } from '../../lib/conversation_policy.mjs'
+import { parseAgentSquaredOutboundEnvelope, renderOwnerFacingReport } from '../../lib/conversation/templates.mjs'
+import { PLATFORM_MAX_TURNS, normalizeConversationControl, resolveSkillMaxTurns } from '../../lib/conversation/policy.mjs'
 
 function clean(value) {
   return `${value ?? ''}`.trim()

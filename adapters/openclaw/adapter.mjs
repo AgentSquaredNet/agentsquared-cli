@@ -1,7 +1,7 @@
 import { withOpenClawGatewayClient } from './ws_client.mjs'
-import { buildReceiverBaseReport, inferOwnerFacingLanguage, parseAgentSquaredOutboundEnvelope } from '../../lib/a2_message_templates.mjs'
-import { normalizeConversationControl, resolveInboundConversationIdentity, resolveSkillMaxTurns } from '../../lib/conversation_policy.mjs'
-import { scrubOutboundText } from '../../lib/runtime_safety.mjs'
+import { buildReceiverBaseReport, inferOwnerFacingLanguage, parseAgentSquaredOutboundEnvelope } from '../../lib/conversation/templates.mjs'
+import { normalizeConversationControl, resolveInboundConversationIdentity, resolveSkillMaxTurns } from '../../lib/conversation/policy.mjs'
+import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import {
   buildOpenClawConversationSummaryPrompt,
   buildOpenClawLocalSkillInventoryPrompt,

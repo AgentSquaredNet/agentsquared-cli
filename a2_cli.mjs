@@ -8,8 +8,8 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs, randomRequestId, requireArg } from './lib/cli.mjs'
 import { gatewayConnect, gatewayHealth, gatewayInboxIndex } from './lib/gateway/api.mjs'
 import { resolveGatewayBase, defaultGatewayStateFile, readGatewayState, currentRuntimeRevision } from './lib/gateway/state.mjs'
-import { getFriendDirectory } from './lib/relay_http.mjs'
-import { generateRuntimeKeyBundle, writeRuntimeKeyBundle } from './lib/runtime_key.mjs'
+import { getFriendDirectory } from './lib/transport/relay_http.mjs'
+import { generateRuntimeKeyBundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
 import { runGateway } from './lib/gateway/server.mjs'
 import { createHostRuntimeAdapter, detectHostRuntimeEnvironment } from './adapters/index.mjs'
 import { inspectOpenClawLocalSkills, resolveOpenClawOutboundSkillHint, summarizeOpenClawConversation } from './adapters/openclaw/adapter.mjs'
@@ -24,13 +24,13 @@ import {
   resolveAgentSquaredDir,
   resolveUserPath
 } from './lib/agentsquared_paths.mjs'
-import { buildSenderBaseReport, buildSenderFailureReport, buildSkillOutboundText, inferOwnerFacingLanguage, peerResponseText, renderOwnerFacingReport } from './lib/a2_message_templates.mjs'
-import { scrubOutboundText } from './lib/runtime_safety.mjs'
-import { buildStandardRuntimeOwnerLines, buildStandardRuntimeReport } from './lib/runtime_report.mjs'
-import { chooseInboundSkill, resolveMailboxKey } from './lib/agent_router.mjs'
-import { createLocalRuntimeExecutor } from './lib/local_runtime.mjs'
-import { createLiveConversationStore } from './lib/live_conversation_store.mjs'
-import { normalizeConversationControl, parseSkillDocumentPolicy, resolveSkillMaxTurns, shouldContinueConversation } from './lib/conversation_policy.mjs'
+import { buildSenderBaseReport, buildSenderFailureReport, buildSkillOutboundText, inferOwnerFacingLanguage, peerResponseText, renderOwnerFacingReport } from './lib/conversation/templates.mjs'
+import { scrubOutboundText } from './lib/runtime/safety.mjs'
+import { buildStandardRuntimeOwnerLines, buildStandardRuntimeReport } from './lib/runtime/report.mjs'
+import { chooseInboundSkill, resolveMailboxKey } from './lib/routing/agent_router.mjs'
+import { createLocalRuntimeExecutor } from './lib/runtime/executor.mjs'
+import { createLiveConversationStore } from './lib/conversation/store.mjs'
+import { normalizeConversationControl, parseSkillDocumentPolicy, resolveSkillMaxTurns, shouldContinueConversation } from './lib/conversation/policy.mjs'
 import {
   assertNoExistingLocalActivation,
   buildGatewayArgs,
