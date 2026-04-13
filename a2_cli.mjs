@@ -6,17 +6,17 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 import { parseArgs, randomRequestId, requireArg } from './lib/cli.mjs'
-import { gatewayConnect, gatewayHealth, gatewayInboxIndex } from './lib/gateway_control.mjs'
-import { resolveGatewayBase, defaultGatewayStateFile, readGatewayState, currentRuntimeRevision } from './lib/gateway_runtime.mjs'
+import { gatewayConnect, gatewayHealth, gatewayInboxIndex } from './lib/gateway/api.mjs'
+import { resolveGatewayBase, defaultGatewayStateFile, readGatewayState, currentRuntimeRevision } from './lib/gateway/state.mjs'
 import { getFriendDirectory } from './lib/relay_http.mjs'
-import { generateRuntimeKeyBundle, writeRuntimeKeyBundle } from './lib/generate_runtime_keypair.mjs'
-import { runGateway } from './lib/gateway_server.mjs'
+import { generateRuntimeKeyBundle, writeRuntimeKeyBundle } from './lib/runtime_key.mjs'
+import { runGateway } from './lib/gateway/server.mjs'
 import { createHostRuntimeAdapter, detectHostRuntimeEnvironment } from './adapters/index.mjs'
 import { inspectOpenClawLocalSkills, resolveOpenClawOutboundSkillHint, summarizeOpenClawConversation } from './adapters/openclaw/adapter.mjs'
 import { resolveOpenClawAgentSelection } from './adapters/openclaw/detect.mjs'
-import { defaultInboxDir } from './lib/gateway_inbox.mjs'
 import {
   defaultGatewayLogFile,
+  defaultInboxDir,
   defaultOpenClawStateDir,
   defaultOnboardingSummaryFile,
   defaultReceiptFile,
@@ -39,11 +39,10 @@ import {
   inspectExistingGateway,
   resolveAgentContext,
   resolvedHostRuntimeFromHealth,
-  reusableLocalProfiles,
   signedRelayContext,
   toOwnerFacingText,
   waitForGatewayReady
-} from './lib/gateway_lifecycle.mjs'
+} from './lib/gateway/lifecycle.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)

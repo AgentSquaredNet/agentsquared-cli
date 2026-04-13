@@ -14,10 +14,10 @@ import { mcpSignTarget, onlineSignTarget, transportRefreshHeaders } from './lib/
 import { DEFAULT_LISTEN_ADDRS, buildRelayListenAddrs, createNode, dialProtocol, readJsonMessage, readSingleLine, requireListeningTransport, writeLine } from './lib/libp2p_a2a.mjs'
 import { attachInboundRouter, buildJsonRpcEnvelope, createConnectTicketWithRecovery, exchangeOverTransport, openDirectPeerSession } from './lib/peer_session.mjs'
 import { signText } from './lib/runtime_key.mjs'
-import { createInboxStore } from './lib/gateway_inbox.mjs'
-import { createGatewayRuntimeState } from './lib/gateway_sessions.mjs'
-import { assertNoExistingLocalActivation, ensureGatewayForUse } from './lib/gateway_lifecycle.mjs'
-import { currentRuntimeRevision } from './lib/gateway_runtime.mjs'
+import { createInboxStore } from './lib/gateway/inbox.mjs'
+import { createGatewayRuntimeState } from './lib/gateway/runtime_state.mjs'
+import { assertNoExistingLocalActivation, ensureGatewayForUse } from './lib/gateway/lifecycle.mjs'
+import { currentRuntimeRevision } from './lib/gateway/state.mjs'
 import { chooseInboundSkill, createAgentRouter, createMailboxScheduler } from './lib/agent_router.mjs'
 import { createLiveConversationStore } from './lib/live_conversation_store.mjs'
 import { createLocalRuntimeExecutor, createOwnerNotifier } from './lib/local_runtime.mjs'
@@ -137,7 +137,7 @@ async function main() {
 
   const protocol = '/agentsquared/test/1.0'
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsquared-gateway-test-'))
-  const gatewayServerSource = fs.readFileSync(path.join(ROOT, 'lib', 'gateway_server.mjs'), 'utf8')
+  const gatewayServerSource = fs.readFileSync(path.join(ROOT, 'lib', 'gateway', 'server.mjs'), 'utf8')
   assert.match(gatewayServerSource, /function clean\s*\(/)
   const fakeOpenClawLog = path.join(tempDir, 'fake-openclaw.log')
   const fakeOpenClaw = path.join(tempDir, 'fake-openclaw.mjs')
