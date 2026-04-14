@@ -330,7 +330,7 @@ export function createOpenClawAdapter({
         const conversation = normalizeConversationControl(item?.request?.params?.metadata ?? {}, {
           defaultTurnIndex: 1,
           defaultDecision: 'handoff',
-          defaultStopReason: 'receiver-budget-limit',
+          defaultStopReason: 'system-error',
           defaultFinalize: true
         })
         const updatedConversation = conversationStore?.appendTurn?.({
@@ -343,7 +343,7 @@ export function createOpenClawAdapter({
           inboundText: displayInboundText,
           replyText: peerReplyText,
           decision: 'handoff',
-          stopReason: 'receiver-budget-limit',
+          stopReason: 'system-error',
           finalize: true,
           ownerSummary: `I paused this exchange because the recent peer conversation window was exceeded. Current 10-minute turn count: ${budget.windowTurns}.`
         }) ?? null
@@ -358,7 +358,7 @@ export function createOpenClawAdapter({
           repliedAt: new Date().toISOString(),
           skillSummary: `I paused this exchange because the recent peer conversation window was exceeded. Current 10-minute turn count: ${budget.windowTurns}.`,
           conversationTurns: updatedConversation?.turns?.length || conversation.turnIndex,
-          stopReason: 'receiver-budget-limit',
+          stopReason: 'system-error',
           detailsAvailableInInbox: true,
           remoteSentAt,
           language: ownerLanguage,
@@ -382,7 +382,7 @@ export function createOpenClawAdapter({
               windowTurns: budget.windowTurns,
               turnIndex: conversation.turnIndex,
               decision: 'handoff',
-              stopReason: 'receiver-budget-limit',
+              stopReason: 'system-error',
               finalize: true
             }
           },
@@ -396,7 +396,7 @@ export function createOpenClawAdapter({
             windowTurns: budget.windowTurns,
             turnIndex: conversation.turnIndex,
             decision: 'handoff',
-            stopReason: 'receiver-budget-limit',
+            stopReason: 'system-error',
             finalize: true
           }
         }
@@ -563,7 +563,7 @@ export function createOpenClawAdapter({
         inboundId: clean(item?.inboundId),
         defaultTurnIndex: inboundConversation.turnIndex,
         defaultDecision: defaultShouldContinue ? 'continue' : 'done',
-        defaultStopReason: inboundConversation.finalize ? 'peer-requested-stop' : '',
+        defaultStopReason: inboundConversation.finalize ? 'completed' : '',
         defaultFinalize: inboundConversation.finalize ? true : !defaultShouldContinue
       })
       const conversation = normalizeConversationControl(parsed?.peerResponse?.metadata ?? item?.request?.params?.metadata ?? {}, {

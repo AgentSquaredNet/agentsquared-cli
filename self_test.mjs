@@ -699,7 +699,7 @@ process.exit(2)
       assert.equal(peerResponse?.metadata?.conversationKey, 'conv-router')
       assert.equal(peerResponse?.metadata?.turnIndex, 4)
       assert.equal(ownerNotification?.conversation?.turnIndex, 4)
-      assert.equal(ownerNotification?.conversation?.stopReason, 'receiver-runtime-unavailable')
+      assert.equal(ownerNotification?.conversation?.stopReason, 'system-error')
     }
     {
       const lifecycleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsquared-gateway-lifecycle-'))
@@ -1058,7 +1058,7 @@ process.exit(2)
     assert.equal(runtimeUnavailableOwnerReports.length, 1)
     assert.match(runtimeUnavailableOwnerReports[0].ownerReport.title, /\*\*🅰️✌️ AgentSquared local runtime unavailable\*\*/)
     assert.match(runtimeUnavailableResponded[0].result.message.parts[0].text, /temporarily unavailable/i)
-    assert.equal(runtimeUnavailableResponded[0].result.metadata.stopReason, 'receiver-runtime-unavailable')
+    assert.equal(runtimeUnavailableResponded[0].result.metadata.stopReason, 'system-error')
 
     const rejectExecutor = createLocalRuntimeExecutor({ agentId: 'agent-a@owner-a' })
     const rejectExecution = await rejectExecutor({
@@ -1112,7 +1112,7 @@ process.exit(2)
     assert.equal(parsedEscapedOpenClaw.peerResponse.message.parts[0].text, 'Escaped JSON works')
     assert.equal(parsedEscapedOpenClaw.ownerReport.summary, 'Escaped owner report')
     assert.equal(parsedEscapedOpenClaw.peerResponse.metadata.turnIndex, 3)
-    assert.equal(parsedEscapedOpenClaw.peerResponse.metadata.stopReason, 'peer-requested-stop')
+    assert.equal(parsedEscapedOpenClaw.peerResponse.metadata.stopReason, 'completed')
     assert.equal(parsedEscapedOpenClaw.peerResponse.metadata.finalize, true)
     assert.equal(shouldContinueConversation(parsedOpenClaw.peerResponse.metadata), true)
     assert.equal(resolveSkillMaxTurns('workflow_alpha'), 1)
@@ -1125,10 +1125,10 @@ process.exit(2)
       normalizeConversationControl({}, {
         defaultTurnIndex: 1,
         defaultDecision: 'done',
-        defaultStopReason: 'single-turn',
+        defaultStopReason: 'completed',
         defaultFinalize: true
       }),
-      { turnIndex: 1, decision: 'done', stopReason: 'single-turn', finalize: true }
+      { turnIndex: 1, decision: 'done', stopReason: 'completed', finalize: true }
     )
     const outboundTemplate = buildSkillOutboundText({
       localAgentId: 'agent-a@owner-a',
@@ -1186,7 +1186,7 @@ process.exit(2)
       replyAt: '2026-03-28T12:01:00Z',
       peerSessionId: 'peer-123',
       turnCount: 3,
-      stopReason: 'goal-satisfied',
+      stopReason: 'completed',
       language: 'en',
       timeZone: 'Asia/Shanghai',
       localTime: true
@@ -1213,7 +1213,7 @@ process.exit(2)
       replyAt: '2026-03-28T12:03:00Z',
       conversationKey: 'conversation_demo',
       turnCount: 2,
-      stopReason: 'goal-satisfied',
+      stopReason: 'completed',
       overallSummary: 'Found one remote-only skill worth evaluating for local adoption.',
       turnOutline: [
         { turnIndex: 1, summary: 'Compared common skills and recent installs.' },
@@ -1241,7 +1241,7 @@ process.exit(2)
       peerReplyText: 'hi',
       repliedAt: '2026-03-28T12:01:00Z',
       conversationTurns: 2,
-      stopReason: 'goal-satisfied',
+      stopReason: 'completed',
       detailsAvailableInInbox: true
     })
     assert.match(renderOwnerFacingReport(receiverBaseReport), /\*\*🅰️✌️ New AgentSquared message from agent-a@owner-a\*\*/)
@@ -1265,7 +1265,7 @@ process.exit(2)
       repliedAt: '2026-03-28T12:01:00Z',
       remoteSentAt: '2026-03-28T11:59:30Z',
       conversationTurns: 4,
-      stopReason: 'goal-satisfied',
+      stopReason: 'completed',
       detailsAvailableInInbox: true,
       language: 'en',
       timeZone: 'Asia/Shanghai',

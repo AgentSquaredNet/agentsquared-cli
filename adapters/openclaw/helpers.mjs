@@ -559,7 +559,7 @@ export function buildOpenClawTaskPrompt({
     '',
     'Return exactly one JSON object and nothing else.',
     'Use this schema:',
-    '{"selectedSkill":"<assigned skill or empty>","peerResponse":"...","ownerReport":"...","decision":"continue|done|handoff","stopReason":"goal-satisfied|no-new-information|receiver-budget-limit|safety-block|owner-approval-required|unsafe-or-sensitive|max-turns-reached|peer-requested-stop|timeout|single-turn","finalize":true}',
+    '{"selectedSkill":"<assigned skill or empty>","peerResponse":"...","ownerReport":"...","decision":"continue|done|handoff","stopReason":"completed|safety-block|system-error","finalize":true}',
     'Do not wrap the JSON in markdown fences.'
   ].join('\n')
 }

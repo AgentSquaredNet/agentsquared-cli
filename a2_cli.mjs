@@ -1036,7 +1036,7 @@ async function commandFriendMessage(args) {
   let currentOutboundControl = normalizeConversationControl({
     turnIndex: 1,
     decision: conversationPolicy.maxTurns <= 1 ? 'done' : 'continue',
-    stopReason: conversationPolicy.maxTurns <= 1 ? 'single-turn' : '',
+    stopReason: conversationPolicy.maxTurns <= 1 ? 'completed' : '',
     finalize: conversationPolicy.maxTurns <= 1
   })
   let turnIndex = 1
@@ -1077,7 +1077,7 @@ async function commandFriendMessage(args) {
       const remoteControl = normalizeConversationControl(extractPeerResponseMetadata(result.response), {
         defaultTurnIndex: turnIndex,
         defaultDecision: 'done',
-        defaultStopReason: turnIndex >= conversationPolicy.maxTurns ? 'single-turn' : '',
+        defaultStopReason: turnIndex >= conversationPolicy.maxTurns ? 'completed' : '',
         defaultFinalize: turnIndex >= conversationPolicy.maxTurns
       })
       turnLog.push({
@@ -1098,7 +1098,7 @@ async function commandFriendMessage(args) {
 
       const nextTurnIndex = turnIndex + 1
       if (nextTurnIndex > conversationPolicy.maxTurns) {
-        localStopReason = 'max-turns-reached'
+        localStopReason = 'completed'
         break
       }
 
@@ -1127,23 +1127,23 @@ async function commandFriendMessage(args) {
         })
       } catch (error) {
         continuationError = clean(error?.message) || 'local runtime execution failed'
-        localStopReason = 'receiver-runtime-unavailable'
+        localStopReason = 'system-error'
         break
       }
       if (localExecution?.reject) {
         continuationError = clean(localExecution.reject.message) || 'local runtime rejected the inbound request'
-        localStopReason = 'receiver-runtime-unavailable'
+        localStopReason = 'system-error'
         break
       }
       const localControl = normalizeConversationControl(localExecution?.peerResponse?.metadata ?? {}, {
         defaultTurnIndex: nextTurnIndex,
         defaultDecision: nextTurnIndex >= conversationPolicy.maxTurns ? 'done' : 'continue',
-        defaultStopReason: nextTurnIndex >= conversationPolicy.maxTurns ? 'max-turns-reached' : '',
+        defaultStopReason: nextTurnIndex >= conversationPolicy.maxTurns ? 'completed' : '',
         defaultFinalize: nextTurnIndex >= conversationPolicy.maxTurns
       })
       currentOutboundText = scrubOutboundText(peerResponseText(localExecution.peerResponse))
       if (!currentOutboundText) {
-        localStopReason = 'goal-satisfied'
+        localStopReason = 'completed'
         break
       }
       turnIndex = nextTurnIndex
