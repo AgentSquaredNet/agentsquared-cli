@@ -5,7 +5,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-import { parseArgs, randomRequestId, requireArg } from './lib/cli.mjs'
+import { parseArgs, randomRequestId, requireArg } from './lib/shared/primitives.mjs'
 import { gatewayConnect, gatewayHealth, gatewayInboxIndex } from './lib/gateway/api.mjs'
 import { resolveGatewayBase, defaultGatewayStateFile, readGatewayState, currentRuntimeRevision } from './lib/gateway/state.mjs'
 import { getFriendDirectory } from './lib/transport/relay_http.mjs'
@@ -23,7 +23,7 @@ import {
   defaultRuntimeKeyFile,
   resolveAgentSquaredDir,
   resolveUserPath
-} from './lib/agentsquared_paths.mjs'
+} from './lib/shared/paths.mjs'
 import { buildSenderBaseReport, buildSenderFailureReport, buildSkillOutboundText, inferOwnerFacingLanguage, peerResponseText, renderOwnerFacingReport } from './lib/conversation/templates.mjs'
 import { scrubOutboundText } from './lib/runtime/safety.mjs'
 import { buildStandardRuntimeOwnerLines, buildStandardRuntimeReport } from './lib/runtime/report.mjs'
