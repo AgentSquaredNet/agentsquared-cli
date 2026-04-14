@@ -24,7 +24,7 @@ import { createLocalRuntimeExecutor, createOwnerNotifier } from './lib/runtime/e
 import { buildSenderBaseReport, buildSenderFailureReport, buildReceiverBaseReport, buildSkillOutboundText, parseAgentSquaredOutboundEnvelope, peerResponseText, renderOwnerFacingReport } from './lib/conversation/templates.mjs'
 import { PLATFORM_MAX_TURNS, normalizeConversationControl, parseSkillDocumentPolicy, resolveSkillMaxTurns, shouldContinueConversation } from './lib/conversation/policy.mjs'
 import { detectHostRuntimeEnvironment, parseOpenClawTaskResult } from './adapters/index.mjs'
-import { buildOpenClawConversationSummaryPrompt, buildOpenClawLocalSkillInventoryPrompt, buildOpenClawOutboundSkillDecisionPrompt, buildOpenClawSafetyPrompt, buildOpenClawTaskPrompt, parseOpenClawConversationSummaryResult, parseOpenClawLocalSkillInventoryResult, resolveOpenClawOutboundSkillHint } from './adapters/openclaw/adapter.mjs'
+import { buildOpenClawSafetyPrompt, buildOpenClawTaskPrompt } from './adapters/openclaw/adapter.mjs'
 import { detectOpenClawHostEnvironment, resolveOpenClawAgentSelection } from './adapters/openclaw/detect.mjs'
 import { withOpenClawGatewayClient } from './adapters/openclaw/ws_client.mjs'
 import { runA2Cli } from './a2_cli.mjs'
@@ -150,7 +150,7 @@ async function main() {
   const fakeGatewayPort = fakeOpenClawGateway.address().port
   const fakeGatewayUrl = `ws://127.0.0.1:${fakeGatewayPort}`
   const fakeOpenClawReplyJson = JSON.stringify({
-    selectedSkill: 'friend-im',
+    selectedSkill: 'workflow_alpha',
     peerResponse: 'I am an AI agent representing my owner.',
     ownerReport: 'agentsquared:agent-a%40owner-a:agent-b%40owner-b handled the inbound question.'
   })
@@ -247,7 +247,7 @@ async function main() {
         let responseText = fakeOpenClawReplyJson
         if (/Choose the best outgoing AgentSquared skill hint/i.test(promptText)) {
           responseText = JSON.stringify({
-            skillHint: /learn|study|skills/i.test(promptText) ? 'agent-mutual-learning' : 'friend-im',
+            skillHint: /learn|study|skills/i.test(promptText) ? 'workflow_beta' : 'workflow_alpha',
             reason: 'selected-by-openclaw-test-double'
           })
         } else if (/very short AgentSquared safety triage/i.test(promptText)) {
@@ -540,7 +540,7 @@ process.exit(2)
       remotePeerId: '12D3KooWDemoPeer',
       remoteAgentId: 'agent-a@owner-a',
       peerSessionId: 'peer_demo',
-      suggestedSkill: 'friend-im'
+      suggestedSkill: 'workflow_alpha'
     })
     const inbound = await inboundPromise
     assert.equal(inbound.inboundId, queued.inboundId)
@@ -566,7 +566,7 @@ process.exit(2)
         peerSessionId: 'peer-demo',
         requestId: 'req-1',
         remoteAgentId: 'agent-a@owner-a',
-        selectedSkill: 'agent-mutual-learning',
+        selectedSkill: 'workflow_beta',
         turnIndex: 1,
         inboundText: 'hello',
         replyText: 'hi',
@@ -578,7 +578,7 @@ process.exit(2)
         peerSessionId: 'peer-demo',
         requestId: 'req-1',
         remoteAgentId: 'agent-a@owner-a',
-        selectedSkill: 'agent-mutual-learning',
+        selectedSkill: 'workflow_beta',
         turnIndex: 1,
         inboundText: 'hello',
         replyText: 'hi',
@@ -590,7 +590,7 @@ process.exit(2)
         peerSessionId: 'peer-demo',
         requestId: 'req-1b',
         remoteAgentId: 'agent-a@owner-a',
-        selectedSkill: 'agent-mutual-learning',
+        selectedSkill: 'workflow_beta',
         turnIndex: 1,
         inboundText: 'hello',
         replyText: 'hi',
@@ -602,7 +602,7 @@ process.exit(2)
         peerSessionId: 'peer-demo',
         requestId: 'req-2',
         remoteAgentId: 'agent-a@owner-a',
-        selectedSkill: 'friend-im',
+        selectedSkill: 'workflow_alpha',
         turnIndex: 1,
         inboundText: 'separate conversation',
         replyText: 'separate reply',
@@ -677,7 +677,7 @@ process.exit(2)
         inboundId: 'inbound-router-fallback',
         remoteAgentId: 'agent-b@owner-b',
         peerSessionId: 'peer-router',
-        suggestedSkill: 'agent-mutual-learning',
+        suggestedSkill: 'workflow_beta',
         request: {
           id: 'req-router-fallback',
           params: {
@@ -791,7 +791,7 @@ process.exit(2)
     const safetyPrompt = buildOpenClawSafetyPrompt({
       localAgentId: 'agent-b@owner-b',
       remoteAgentId: 'agent-a@owner-a',
-      selectedSkill: 'friend-im',
+      selectedSkill: 'workflow_alpha',
       item: {
         request: {
           method: 'message/send',
@@ -809,7 +809,7 @@ process.exit(2)
     const taskPrompt = buildOpenClawTaskPrompt({
       localAgentId: 'agent-b@owner-b',
       remoteAgentId: 'agent-a@owner-a',
-      selectedSkill: 'friend-im',
+      selectedSkill: 'workflow_beta',
       item: {
         peerSessionId: 'peer_demo',
         request: {
@@ -826,7 +826,7 @@ process.exit(2)
               decision: 'continue',
               finalize: false,
               sharedSkill: {
-                name: 'agent-mutual-learning',
+                name: 'workflow_beta',
                 maxTurns: 8,
                 document: 'demo'
               }
@@ -838,21 +838,12 @@ process.exit(2)
     assert.match(taskPrompt, /do not ask the owner or the remote agent to prove friendship again/i)
     assert.match(taskPrompt, /turnIndex: 3/)
     assert.match(taskPrompt, /platformMaxTurns: 20/)
-    assert.match(taskPrompt, /agent-mutual-learning => 8 turns/)
-    const outboundSkillDecisionPrompt = buildOpenClawOutboundSkillDecisionPrompt({
-      localAgentId: 'agent-a@owner-a',
-      targetAgentId: 'agent-b@owner-b',
-      ownerText: 'Study their skills and compare our collaboration fit.'
-    })
-    assert.match(outboundSkillDecisionPrompt, /Choose the best outgoing AgentSquared skill hint/i)
-    assert.match(outboundSkillDecisionPrompt, /friend-im/)
-    assert.match(outboundSkillDecisionPrompt, /agent-mutual-learning/)
-    assert.match(outboundSkillDecisionPrompt, /learn their skills/i)
-    assert.match(outboundSkillDecisionPrompt, /greetings like "say hello" do not override the learning goal/i)
+    assert.match(taskPrompt, /localSkillMaxTurns: 8/)
+    assert.match(taskPrompt, /sharedSkillName: workflow_beta/)
 
     assert.equal(chooseInboundSkill({
       suggestedSkill: '',
-      defaultSkill: 'friend-im',
+      defaultSkill: 'workflow_alpha',
       request: {
         method: 'message/send',
         params: {
@@ -861,10 +852,10 @@ process.exit(2)
           }
         }
       }
-    }), 'friend-im')
+    }), 'workflow_alpha')
     assert.equal(chooseInboundSkill({
-      suggestedSkill: 'agent-mutual-learning',
-      defaultSkill: 'friend-im',
+      suggestedSkill: 'workflow_beta',
+      defaultSkill: 'workflow_alpha',
       request: {
         method: 'message/send',
         params: {
@@ -873,18 +864,7 @@ process.exit(2)
           }
         }
       }
-    }), 'agent-mutual-learning')
-    const outboundSkillDecision = await resolveOpenClawOutboundSkillHint({
-      localAgentId: 'agent-a@owner-a',
-      targetAgentId: 'agent-b@owner-b',
-      ownerText: 'Say hello and study their skills with a deeper exchange.',
-      openclawAgent: 'bot1',
-      configPath: fakeOpenClawConfig,
-      gatewayUrl: fakeGatewayUrl,
-      gatewayToken: 'test-openclaw-token'
-    })
-    assert.equal(outboundSkillDecision.skillHint, 'agent-mutual-learning')
-    assert.equal(outboundSkillDecision.reason, 'selected-by-openclaw-test-double')
+    }), 'workflow_beta')
 
     const schedulerEvents = []
     const scheduler = createMailboxScheduler({
@@ -916,8 +896,8 @@ process.exit(2)
     const ownerReports = []
     const integratedRouter = createAgentRouter({
       maxActiveMailboxes: 2,
-      routerSkills: ['friend-im', 'agent-mutual-learning'],
-      defaultSkill: 'friend-im',
+      routerSkills: ['workflow_alpha', 'workflow_beta'],
+      defaultSkill: 'workflow_alpha',
       async executeInbound({ item, selectedSkill, mailboxKey }) {
         return {
           peerResponse: {
@@ -965,8 +945,8 @@ process.exit(2)
     await integratedRouter.whenIdle()
     assert.equal(rejected.length, 0)
     assert.equal(responded.length, 1)
-    assert.equal(responded[0].result.message.parts[0].text, 'handled:friend-im:conversation:conv-router1')
-    assert.equal(responded[0].result.metadata.selectedSkill, 'friend-im')
+    assert.equal(responded[0].result.message.parts[0].text, 'handled:workflow_alpha:conversation:conv-router1')
+    assert.equal(responded[0].result.metadata.selectedSkill, 'workflow_alpha')
     assert.equal(ownerReports.length, 1)
     assert.equal(ownerReports[0].ownerReport.summary, 'owner saw router1')
 
@@ -974,10 +954,10 @@ process.exit(2)
     const fallbackRejected = []
     const fallbackRouter = createAgentRouter({
       maxActiveMailboxes: 1,
-      routerSkills: ['friend-im', 'agent-mutual-learning'],
-      defaultSkill: 'friend-im',
+      routerSkills: ['workflow_alpha', 'workflow_beta'],
+      defaultSkill: 'workflow_alpha',
       async executeInbound({ selectedSkill }) {
-        if (selectedSkill === 'agent-mutual-learning') {
+        if (selectedSkill === 'workflow_beta') {
           return {
             reject: {
               code: 503,
@@ -1012,7 +992,7 @@ process.exit(2)
     await fallbackRouter.enqueue({
       inboundId: 'router-fallback',
       remoteAgentId: 'peer@Test',
-      suggestedSkill: 'agent-mutual-learning',
+      suggestedSkill: 'workflow_beta',
       request: {
         method: 'message/send',
         params: {
@@ -1028,16 +1008,16 @@ process.exit(2)
     await fallbackRouter.whenIdle()
     assert.equal(fallbackRejected.length, 0)
     assert.equal(fallbackResponded.length, 1)
-    assert.equal(fallbackResponded[0].result.message.parts[0].text, 'handled:friend-im')
-    assert.equal(fallbackResponded[0].result.metadata.selectedSkill, 'friend-im')
+    assert.match(fallbackResponded[0].result.message.parts[0].text, /temporarily unavailable/i)
+    assert.equal(fallbackResponded[0].result.metadata.selectedSkill, 'workflow_alpha')
 
     const runtimeUnavailableResponded = []
     const runtimeUnavailableRejected = []
     const runtimeUnavailableOwnerReports = []
     const runtimeUnavailableRouter = createAgentRouter({
       maxActiveMailboxes: 1,
-      routerSkills: ['friend-im', 'agent-mutual-learning'],
-      defaultSkill: 'friend-im',
+      routerSkills: ['workflow_alpha', 'workflow_beta'],
+      defaultSkill: 'workflow_alpha',
       async executeInbound() {
         return {
           reject: {
@@ -1059,7 +1039,7 @@ process.exit(2)
     await runtimeUnavailableRouter.enqueue({
       inboundId: 'router-runtime-unavailable',
       remoteAgentId: 'peer@Test',
-      suggestedSkill: 'agent-mutual-learning',
+      suggestedSkill: 'workflow_beta',
       request: {
         method: 'message/send',
         params: {
@@ -1083,13 +1063,13 @@ process.exit(2)
     const rejectExecutor = createLocalRuntimeExecutor({ agentId: 'agent-a@owner-a' })
     const rejectExecution = await rejectExecutor({
       item: { inboundId: 'router2' },
-      selectedSkill: 'friend-im',
+      selectedSkill: 'workflow_alpha',
       mailboxKey: 'agent:peer@test'
     })
     assert.equal(rejectExecution.reject.code, 503)
 
     const parsedOpenClaw = parseOpenClawTaskResult(JSON.stringify({
-      selectedSkill: 'agent-mutual-learning',
+      selectedSkill: 'workflow_beta',
       peerResponse: 'Hello from OpenClaw',
       ownerReport: 'OpenClaw owner report',
       decision: 'continue',
@@ -1097,15 +1077,15 @@ process.exit(2)
       finalize: false,
       turnIndex: 2
     }), {
-      defaultSkill: 'friend-im',
+      defaultSkill: 'workflow_alpha',
       remoteAgentId: 'peer@Test',
       inboundId: 'router-openclaw'
     })
     assert.equal(parsedOpenClaw.peerResponse.message.parts[0].text, 'Hello from OpenClaw')
     assert.equal(parsedOpenClaw.ownerReport.summary, 'OpenClaw owner report')
     assert.match(parsedOpenClaw.ownerReport.title, /\*\*🅰️✌️ New AgentSquared message from peer@Test\*\*/)
-    assert.equal(parsedOpenClaw.peerResponse.metadata.selectedSkill, 'friend-im')
-    assert.equal(parsedOpenClaw.peerResponse.metadata.modelSelectedSkill, 'agent-mutual-learning')
+    assert.equal(parsedOpenClaw.peerResponse.metadata.selectedSkill, 'workflow_alpha')
+    assert.equal(parsedOpenClaw.peerResponse.metadata.modelSelectedSkill, 'workflow_beta')
     assert.equal(parsedOpenClaw.peerResponse.metadata.turnIndex, 2)
     assert.equal(parsedOpenClaw.peerResponse.metadata.decision, 'continue')
     assert.equal(parsedOpenClaw.peerResponse.metadata.finalize, false)
@@ -1113,7 +1093,7 @@ process.exit(2)
       peerResponse: 'Keep going',
       ownerReport: 'Continue learning'
     }), {
-      defaultSkill: 'agent-mutual-learning',
+      defaultSkill: 'workflow_beta',
       remoteAgentId: 'peer@Test',
       inboundId: 'router-openclaw-defaults',
       defaultTurnIndex: 3,
@@ -1124,8 +1104,8 @@ process.exit(2)
     assert.equal(parsedOpenClawDefaults.peerResponse.metadata.turnIndex, 3)
     assert.equal(parsedOpenClawDefaults.peerResponse.metadata.decision, 'continue')
     assert.equal(parsedOpenClawDefaults.peerResponse.metadata.finalize, false)
-    const parsedEscapedOpenClaw = parseOpenClawTaskResult('\\n{\\n  \\"selectedSkill\\": \\"agent-mutual-learning\\",\\n  \\"peerResponse\\": \\"Escaped JSON works\\",\\n  \\"ownerReport\\": \\"Escaped owner report\\",\\n  \\"decision\\": \\"done\\",\\n  \\"stopReason\\": \\"peer-requested-stop\\",\\n  \\"finalize\\": true,\\n  \\"turnIndex\\": 3\\n}', {
-      defaultSkill: 'friend-im',
+    const parsedEscapedOpenClaw = parseOpenClawTaskResult('\\n{\\n  \\"selectedSkill\\": \\"workflow_beta\\",\\n  \\"peerResponse\\": \\"Escaped JSON works\\",\\n  \\"ownerReport\\": \\"Escaped owner report\\",\\n  \\"decision\\": \\"done\\",\\n  \\"stopReason\\": \\"peer-requested-stop\\",\\n  \\"finalize\\": true,\\n  \\"turnIndex\\": 3\\n}', {
+      defaultSkill: 'workflow_alpha',
       remoteAgentId: 'peer@Test',
       inboundId: 'router-openclaw-escaped'
     })
@@ -1135,11 +1115,11 @@ process.exit(2)
     assert.equal(parsedEscapedOpenClaw.peerResponse.metadata.stopReason, 'peer-requested-stop')
     assert.equal(parsedEscapedOpenClaw.peerResponse.metadata.finalize, true)
     assert.equal(shouldContinueConversation(parsedOpenClaw.peerResponse.metadata), true)
-    assert.equal(resolveSkillMaxTurns('friend-im'), 1)
-    assert.equal(resolveSkillMaxTurns('agent-mutual-learning', { name: 'agent-mutual-learning', maxTurns: 99 }), PLATFORM_MAX_TURNS)
+    assert.equal(resolveSkillMaxTurns('workflow_alpha'), 1)
+    assert.equal(resolveSkillMaxTurns('workflow_beta', { name: 'workflow_beta', maxTurns: 99 }), PLATFORM_MAX_TURNS)
     assert.deepEqual(
-      parseSkillDocumentPolicy('---\nname: agent-mutual-learning\nmaxTurns: 8\n---\nbody'),
-      { name: 'agent-mutual-learning', maxTurns: 8 }
+      parseSkillDocumentPolicy('---\nname: workflow_beta\nmaxTurns: 8\n---\nbody'),
+      { name: 'workflow_beta', maxTurns: 8 }
     )
     assert.deepEqual(
       normalizeConversationControl({}, {
@@ -1153,7 +1133,7 @@ process.exit(2)
     const outboundTemplate = buildSkillOutboundText({
       localAgentId: 'agent-a@owner-a',
       targetAgentId: 'agent-b@owner-b',
-      skillName: 'friend-im',
+      skillName: 'workflow_alpha',
       originalText: 'hello',
       sentAt: '2026-03-28T12:00:00Z'
     })
@@ -1166,16 +1146,12 @@ process.exit(2)
     const mutualLearningOutboundTemplate = buildSkillOutboundText({
       localAgentId: 'agent-a@owner-a',
       targetAgentId: 'agent-b@owner-b',
-      skillName: 'agent-mutual-learning',
+      skillName: 'workflow_beta',
       originalText: 'learn useful skills',
-      sentAt: '2026-03-28T12:00:00Z',
-      localSkillInventory: 'All skills/workflows: skill-a, skill-b, skill-c\nFrequent skills/workflows: skill-a, skill-b\nRecent skills: skill-c\nTop highlights: skill-a automation'
+      sentAt: '2026-03-28T12:00:00Z'
     })
-    assert.match(mutualLearningOutboundTemplate, /ALL SKILLS: list your current actual skill names or workflow names/i)
-    assert.match(mutualLearningOutboundTemplate, /MOST USED: list the ones you use most often/i)
-    assert.match(mutualLearningOutboundTemplate, /RECENT: list any skills or workflows you installed or added recently/i)
-    assert.match(mutualLearningOutboundTemplate, /DIFFERENT VS MY SNAPSHOT/i)
-    assert.match(mutualLearningOutboundTemplate, /Local Skill Snapshot/)
+    assert.match(mutualLearningOutboundTemplate, /Suggested AgentSquared workflow hint: workflow_beta\./)
+    assert.doesNotMatch(mutualLearningOutboundTemplate, /Local Skill Snapshot/)
     assert.equal(peerResponseText({
       result: {
         message: {
@@ -1186,7 +1162,7 @@ process.exit(2)
     const failureReport = buildSenderFailureReport({
       localAgentId: 'agent-a@owner-a',
       targetAgentId: 'agent-b@owner-b',
-      selectedSkill: 'friend-im',
+      selectedSkill: 'workflow_alpha',
       sentAt: '2026-03-28T12:00:00Z',
       originalText: 'hello',
       failureCode: 'target-unreachable',
@@ -1203,7 +1179,7 @@ process.exit(2)
     const senderBaseReport = buildSenderBaseReport({
       localAgentId: 'agent-a@owner-a',
       targetAgentId: 'agent-b@owner-b',
-      selectedSkill: 'friend-im',
+      selectedSkill: 'workflow_alpha',
       sentAt: '2026-03-28T12:00:00Z',
       originalText: 'hello',
       replyText: 'hi',
@@ -1221,7 +1197,7 @@ process.exit(2)
     assert.match(senderBaseReport.message, /Overall summary/)
     assert.match(senderBaseReport.message, /- hi/)
     assert.match(senderBaseReport.message, /Detailed conversation/)
-    assert.match(senderBaseReport.message, /Skill Hint: friend-im/)
+    assert.match(senderBaseReport.message, /Skill Hint: workflow_alpha/)
     assert.match(senderBaseReport.message, /Actions taken/)
     assert.match(senderBaseReport.message, /Turn 1:/)
     assert.match(senderBaseReport.message, /Total turns: 3\./)
@@ -1229,7 +1205,7 @@ process.exit(2)
     const mutualLearningSenderReport = buildSenderBaseReport({
       localAgentId: 'agent-a@owner-a',
       targetAgentId: 'agent-b@owner-b',
-      selectedSkill: 'agent-mutual-learning',
+      selectedSkill: 'workflow_beta',
       sentAt: '2026-03-28T12:00:00Z',
       originalText: 'compare skills',
       sentText: 'List your current skills first, then compare them against my snapshot.',
@@ -1258,8 +1234,8 @@ process.exit(2)
     const receiverBaseReport = buildReceiverBaseReport({
       localAgentId: 'agent-b@owner-b',
       remoteAgentId: 'agent-a@owner-a',
-      incomingSkillHint: 'agent-mutual-learning',
-      selectedSkill: 'friend-im',
+      incomingSkillHint: 'workflow_beta',
+      selectedSkill: 'workflow_alpha',
       receivedAt: '2026-03-28T12:00:00Z',
       inboundText: 'hello',
       peerReplyText: 'hi',
@@ -1269,8 +1245,8 @@ process.exit(2)
       detailsAvailableInInbox: true
     })
     assert.match(renderOwnerFacingReport(receiverBaseReport), /\*\*🅰️✌️ New AgentSquared message from agent-a@owner-a\*\*/)
-    assert.match(receiverBaseReport.message, /Incoming Skill Hint: agent-mutual-learning/)
-    assert.match(receiverBaseReport.message, /Local Skill Used: friend-im/)
+    assert.match(receiverBaseReport.message, /Incoming Skill Hint: workflow_beta/)
+    assert.match(receiverBaseReport.message, /Local Skill Used: workflow_alpha/)
     assert.match(receiverBaseReport.message, /Overall summary/)
     assert.match(receiverBaseReport.message, /Detailed conversation/)
     assert.match(receiverBaseReport.message, /Actions taken/)
@@ -1281,8 +1257,8 @@ process.exit(2)
     const localizedReceiverBaseReport = buildReceiverBaseReport({
       localAgentId: 'agent-b@owner-b',
       remoteAgentId: 'agent-a@owner-a',
-      incomingSkillHint: 'agent-mutual-learning',
-      selectedSkill: 'friend-im',
+      incomingSkillHint: 'workflow_beta',
+      selectedSkill: 'workflow_alpha',
       receivedAt: '2026-03-28T12:00:00Z',
       inboundText: 'Let us collaborate later.',
       peerReplyText: 'Sounds good. We can start with a simple exchange.',
@@ -1297,53 +1273,12 @@ process.exit(2)
     })
     assert.match(localizedReceiverBaseReport.title, /\*\*🅰️✌️ New AgentSquared message from agent-a@owner-a\*\*/)
     assert.match(localizedReceiverBaseReport.message, /Received At \(Local Time\): 2026-03-28 20:00:00 \(Asia\/Shanghai\)/)
-    assert.match(localizedReceiverBaseReport.message, /Incoming Skill Hint: agent-mutual-learning/)
-    assert.match(localizedReceiverBaseReport.message, /Local Skill Used: friend-im/)
+    assert.match(localizedReceiverBaseReport.message, /Incoming Skill Hint: workflow_beta/)
+    assert.match(localizedReceiverBaseReport.message, /Local Skill Used: workflow_alpha/)
     assert.match(localizedReceiverBaseReport.message, /Overall summary/)
     assert.match(localizedReceiverBaseReport.message, /Detailed conversation/)
     assert.match(localizedReceiverBaseReport.message, /Actions taken/)
     assert.match(localizedReceiverBaseReport.message, /Remote Sent At \(Local Time\): 2026-03-28 19:59:30 \(Asia\/Shanghai\)/)
-
-    const conversationSummaryPrompt = buildOpenClawConversationSummaryPrompt({
-      localAgentId: 'agent-a@owner-a',
-      remoteAgentId: 'agent-b@owner-b',
-      selectedSkill: 'agent-mutual-learning',
-      originalOwnerText: 'learn useful remote skills',
-      localSkillInventory: 'Frequent skills/workflows: skill-a, skill-b',
-      turnLog: [
-        {
-          turnIndex: 1,
-          outboundText: 'What skills do you use most often or install recently?',
-          replyText: 'I recently installed skill-x and use it daily.',
-          remoteStopReason: ''
-        }
-      ]
-    })
-    assert.match(conversationSummaryPrompt, /a concrete skill or workflow the local agent does not already have/)
-    assert.match(conversationSummaryPrompt, /Frequent skills\/workflows: skill-a, skill-b/)
-    const parsedConversationSummary = parseOpenClawConversationSummaryResult(`{
-      "overallSummary":"Found one remote-only skill worth evaluating.",
-      "detailedConversation":["Turn 1: Compared frequent and recent skills.","Turn 2: Clarified what skill-x does and why it matters."],
-      "differentiatedSkills":["skill-x: automates a workflow the local agent does not currently have"]
-    }`)
-    assert.equal(parsedConversationSummary.differentiatedSkills[0], 'skill-x: automates a workflow the local agent does not currently have')
-    const localSkillInventoryPrompt = buildOpenClawLocalSkillInventoryPrompt({
-      localAgentId: 'agent-a@owner-a',
-      purpose: 'sender-conversation-demo'
-    })
-    assert.match(localSkillInventoryPrompt, /inspect your actual local skill environment/i)
-    const parsedLocalSkillInventory = parseOpenClawLocalSkillInventoryResult(`{
-      "allSkills":["skill-a","skill-b","skill-c"],
-      "frequentSkills":["skill-a","skill-b"],
-      "recentSkills":["skill-c"],
-      "topHighlights":["skill-a automation","skill-c integration"],
-      "inventorySummary":"Verified local skills from the OpenClaw runtime."
-    }`)
-    assert.deepEqual(parsedLocalSkillInventory.allSkills, ['skill-a', 'skill-b', 'skill-c'])
-    assert.deepEqual(parsedLocalSkillInventory.frequentSkills, ['skill-a', 'skill-b'])
-    assert.deepEqual(parsedLocalSkillInventory.recentSkills, ['skill-c'])
-    assert.equal(parsedLocalSkillInventory.topHighlights[0], 'skill-a automation')
-    assert.equal(parsedLocalSkillInventory.inventorySummary, 'Verified local skills from the OpenClaw runtime.')
     assert.match(localizedReceiverBaseReport.message, /Turn 1:/)
     assert.match(localizedReceiverBaseReport.message, /Total turns: 4\./)
     assert.doesNotMatch(localizedReceiverBaseReport.message, /Skill Notes:/)
@@ -1410,7 +1345,7 @@ process.exit(2)
           }
         }
       },
-      selectedSkill: 'friend-im',
+      selectedSkill: 'workflow_alpha',
       mailboxKey: 'agent:agent-b@owner-b'
     })
     assert.equal(openclawExecution.peerResponse.message.parts[0].text, 'I am an AI agent representing my owner.')
@@ -1444,7 +1379,7 @@ process.exit(2)
           }
         }
       },
-      selectedSkill: 'friend-im',
+      selectedSkill: 'workflow_alpha',
       mailboxKey: 'agent:agent-b@owner-b'
     })
     assert.equal(safetyExecution.peerResponse.metadata.safetyDecision, 'reject')
@@ -1471,7 +1406,7 @@ process.exit(2)
           }
         }
       },
-      selectedSkill: 'friend-im',
+      selectedSkill: 'workflow_alpha',
       mailboxKey: 'agent:agent-b@owner-b'
     })
     assert.equal(collaborationExecution.peerResponse.message.parts[0].text, 'I am an AI agent representing my owner.')
@@ -1493,7 +1428,7 @@ process.exit(2)
           }
         }
       },
-      selectedSkill: 'friend-im',
+      selectedSkill: 'workflow_alpha',
       mailboxKey: 'agent:agent-b@owner-b'
     })
     assert.equal(taskExecution.peerResponse.metadata.safetyDecision, undefined)
@@ -1518,7 +1453,7 @@ process.exit(2)
             }
           }
         },
-        selectedSkill: 'friend-im',
+        selectedSkill: 'workflow_alpha',
         mailboxKey: 'agent:agent-c@owner-c'
       })
     }
@@ -1545,7 +1480,7 @@ process.exit(2)
         remoteAgentId: 'agent-b@owner-b',
         peerSessionId: 'peer-openclaw'
       },
-      selectedSkill: 'friend-im',
+      selectedSkill: 'workflow_alpha',
       mailboxKey: 'agent:agent-b@owner-b',
       ownerReport: {
         summary: 'agent-b@owner-b asked whether I am human or AI. private key -----BEGIN PRIVATE KEY-----'
@@ -1581,7 +1516,7 @@ process.exit(2)
         remoteAgentId: 'agent-b@owner-b',
         peerSessionId: 'peer-openclaw'
       },
-      selectedSkill: 'friend-im',
+      selectedSkill: 'workflow_alpha',
       mailboxKey: 'agent:agent-b@owner-b',
       ownerReport: {
         summary: 'duplicate final summary',
@@ -1599,7 +1534,7 @@ process.exit(2)
         remoteAgentId: 'agent-b@owner-b',
         peerSessionId: 'peer-openclaw'
       },
-      selectedSkill: 'friend-im',
+      selectedSkill: 'workflow_alpha',
       mailboxKey: 'agent:agent-b@owner-b',
       ownerReport: {
         summary: 'duplicate final summary second time',
@@ -1696,7 +1631,7 @@ process.exit(2)
     })
     const appended = inboxStore.appendEntry({
       agentId: 'agent-a@owner-a',
-      selectedSkill: 'friend-im',
+      selectedSkill: 'workflow_alpha',
       mailboxKey: 'agent:peer@test',
       item: {
         inboundId: 'router3',
@@ -1732,7 +1667,7 @@ process.exit(2)
     assert.equal(inboxStore.readIndex().ownerPushAttemptedCount, 0)
     const appendedDuplicateRequest = inboxStore.appendEntry({
       agentId: 'agent-a@owner-a',
-      selectedSkill: 'friend-im',
+      selectedSkill: 'workflow_alpha',
       mailboxKey: 'agent:peer@test',
       item: {
         inboundId: 'router3-duplicate',
@@ -1766,7 +1701,7 @@ process.exit(2)
     })
     const appendedDuplicateRequestAgain = inboxStore.appendEntry({
       agentId: 'agent-a@owner-a',
-      selectedSkill: 'friend-im',
+      selectedSkill: 'workflow_alpha',
       mailboxKey: 'agent:peer@test',
       item: {
         inboundId: 'router3-duplicate-2',
@@ -1800,7 +1735,7 @@ process.exit(2)
     })
     const appendedFinalConversation = inboxStore.appendEntry({
       agentId: 'agent-a@owner-a',
-      selectedSkill: 'agent-mutual-learning',
+      selectedSkill: 'workflow_beta',
       mailboxKey: 'agent:peer@test',
       item: {
         inboundId: 'router-final-1',
@@ -1842,7 +1777,7 @@ process.exit(2)
     })
     const appendedFinalConversationAgain = inboxStore.appendEntry({
       agentId: 'agent-a@owner-a',
-      selectedSkill: 'agent-mutual-learning',
+      selectedSkill: 'workflow_beta',
       mailboxKey: 'agent:peer@test',
       item: {
         inboundId: 'router-final-2',
@@ -2079,7 +2014,7 @@ process.exit(2)
         streamProtocol: '/agentsquared/reuse/1.0',
         listenAddrs: responder.getMultiaddrs().map((addr) => addr.toString())
       },
-      skillHint: 'friend-im'
+      skillHint: 'workflow_alpha'
     })
     const reusedDialResult = await openDirectPeerSession({
       apiBase: 'https://api.agentsquared.net',
@@ -2090,7 +2025,7 @@ process.exit(2)
         streamProtocol: '/agentsquared/reuse/1.0'
       },
       targetAgentId: 'agent-b@owner-b',
-      skillName: 'friend-im',
+      skillName: 'workflow_alpha',
       method: 'message/send',
       message: {
         kind: 'message',
@@ -2116,7 +2051,7 @@ process.exit(2)
         streamProtocol: '/agentsquared/reuse/1.0'
       },
       targetAgentId: 'agent-b@owner-b',
-      skillName: 'friend-im',
+      skillName: 'workflow_alpha',
       method: 'message/send',
       message: {
         kind: 'message',
@@ -2201,7 +2136,7 @@ process.exit(2)
           streamProtocol: '/agentsquared/retry/1.0',
         },
         targetAgentId: 'agent-b@owner-b',
-        skillName: 'friend-im',
+        skillName: 'workflow_alpha',
         transport: retryTransport,
         cachedTransport: null,
         republishPresence: async () => {
@@ -2234,7 +2169,7 @@ process.exit(2)
         streamProtocol: '/agentsquared/reuse-ambiguous/1.0',
         listenAddrs: responder.getMultiaddrs().map((addr) => addr.toString())
       },
-      skillHint: 'friend-im'
+      skillHint: 'workflow_alpha'
     })
     await assert.rejects(
       () => openDirectPeerSession({
@@ -2249,7 +2184,7 @@ process.exit(2)
           a2aProtocolVersion: 'a2a-jsonrpc-custom-binding/2026-03'
         },
         targetAgentId: 'agent-b@owner-b',
-        skillName: 'friend-im',
+        skillName: 'workflow_alpha',
         method: 'message/send',
         message: {
           kind: 'message',
@@ -2310,7 +2245,7 @@ process.exit(2)
         streamProtocol: '/agentsquared/reuse-empty-retry/1.0',
         listenAddrs: responder.getMultiaddrs().map((addr) => addr.toString())
       },
-      skillHint: 'friend-im'
+      skillHint: 'workflow_alpha'
     })
     const emptyRetryResult = await openDirectPeerSession({
       apiBase: 'https://api.agentsquared.net',
@@ -2321,7 +2256,7 @@ process.exit(2)
         streamProtocol: '/agentsquared/reuse-empty-retry/1.0'
       },
       targetAgentId: 'agent-b@owner-b',
-      skillName: 'friend-im',
+      skillName: 'workflow_alpha',
       method: 'message/send',
       message: {
         kind: 'message',
@@ -2341,16 +2276,16 @@ process.exit(2)
       remotePeerId: 'peer-1',
       remoteAgentId: 'agent-b@owner-b',
       peerSessionId: 'peer-session-1',
-      suggestedSkill: 'friend-im',
-      defaultSkill: 'friend-im'
+      suggestedSkill: 'workflow_alpha',
+      defaultSkill: 'workflow_alpha'
     })
     const duplicatePendingSecond = await duplicatePendingState.enqueueInbound({
       request: { id: 'req-duplicate-pending', params: { metadata: {} } },
       remotePeerId: 'peer-1',
       remoteAgentId: 'agent-b@owner-b',
       peerSessionId: 'peer-session-1',
-      suggestedSkill: 'friend-im',
-      defaultSkill: 'friend-im'
+      suggestedSkill: 'workflow_alpha',
+      defaultSkill: 'workflow_alpha'
     })
     assert.equal(duplicatePendingSecond.duplicateOfPending, true)
     assert.equal(duplicatePendingSecond.inboundId, duplicatePendingFirst.inboundId)
@@ -2515,7 +2450,7 @@ process.exit(2)
             peerId: 'peer-remote',
             streamProtocol: '/agentsquared/reuse-fallback/1.0'
           },
-          skillHint: 'friend-im'
+          skillHint: 'workflow_alpha'
         }
       },
       touchTrustedSession() {},
@@ -2530,7 +2465,7 @@ process.exit(2)
         streamProtocol: '/agentsquared/reuse-fallback/1.0'
       },
       targetAgentId: 'agent-b@owner-b',
-      skillName: 'friend-im',
+      skillName: 'workflow_alpha',
       method: 'message/send',
       message: {
         kind: 'message',

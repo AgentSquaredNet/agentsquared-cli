@@ -12,7 +12,6 @@ import { getFriendDirectory } from './lib/transport/relay_http.mjs'
 import { generateRuntimeKeyBundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
 import { runGateway } from './lib/gateway/server.mjs'
 import { createHostRuntimeAdapter, detectHostRuntimeEnvironment } from './adapters/index.mjs'
-import { inspectOpenClawLocalSkills, resolveOpenClawOutboundSkillHint, summarizeOpenClawConversation } from './adapters/openclaw/adapter.mjs'
 import { resolveOpenClawAgentSelection } from './adapters/openclaw/detect.mjs'
 import {
   defaultGatewayLogFile,
@@ -197,7 +196,7 @@ function extractPeerResponseMetadata(response = null) {
 
 function resolveConversationPolicy(skillName = '', sharedSkill = null) {
   return {
-    skillName: clean(skillName) || 'friend-im',
+    skillName: clean(skillName),
     maxTurns: resolveSkillMaxTurns(skillName, sharedSkill)
   }
 }
@@ -284,66 +283,6 @@ async function createCliLocalRuntimeExecutor({
   })
 }
 
-async function resolveOutboundSkillHint({
-  agentId,
-  keyFile,
-  args,
-  targetAgentId,
-  text,
-  explicitSkillName = '',
-  sharedSkill = null
-}) {
-  const explicit = clean(explicitSkillName)
-  if (explicit) {
-    return {
-      skillHint: explicit,
-      source: 'explicit',
-      reason: 'explicit-skill-arg'
-    }
-  }
-  const sharedSkillName = clean(sharedSkill?.name)
-  if (sharedSkillName) {
-    return {
-      skillHint: sharedSkillName,
-      source: 'shared-skill',
-      reason: 'shared-skill-file'
-    }
-  }
-  try {
-    const hostContext = await resolveCliOpenClawHostContext({
-      agentId,
-      keyFile,
-      args,
-      purpose: 'outbound skill selection'
-    })
-    const decision = await resolveOpenClawOutboundSkillHint({
-      localAgentId: agentId,
-      targetAgentId,
-      ownerText: text,
-      openclawAgent: hostContext.resolvedOpenClawAgent,
-      command: hostContext.openclawCommand,
-      cwd: hostContext.openclawCwd,
-      configPath: hostContext.openclawConfigPath,
-      stateDir: hostContext.openclawStateDir,
-      gatewayUrl: hostContext.openclawGatewayUrl,
-      gatewayToken: hostContext.openclawGatewayToken,
-      gatewayPassword: hostContext.openclawGatewayPassword,
-      availableSkills: ['friend-im', 'agent-mutual-learning']
-    })
-    return {
-      skillHint: clean(decision.skillHint) || 'friend-im',
-      source: 'agent-decision',
-      reason: clean(decision.reason) || 'agent-selected-skill'
-    }
-  } catch (error) {
-    return {
-      skillHint: 'friend-im',
-      source: 'fallback',
-      reason: clean(error?.message) || 'agent-decision-failed'
-    }
-  }
-}
-
 async function executeLocalConversationTurn({
   localRuntimeExecutor,
   localAgentId,
@@ -354,7 +293,6 @@ async function executeLocalConversationTurn({
   sharedSkill,
   inboundText,
   originalOwnerText = '',
-  localSkillInventory = '',
   turnIndex,
   remoteControl = null
 }) {
@@ -369,7 +307,7 @@ async function executeLocalConversationTurn({
     remoteAgentId: targetAgentId,
     peerSessionId,
     suggestedSkill: skillHint,
-    defaultSkill: skillHint || 'friend-im',
+    defaultSkill: clean(skillHint),
     request: {
       id: `local-turn-${turnIndex}`,
       method: 'message/send',
@@ -395,7 +333,7 @@ async function executeLocalConversationTurn({
     }
   }
   const selectedSkill = chooseInboundSkill(item, {
-    defaultSkill: skillHint || 'friend-im'
+    defaultSkill: clean(skillHint)
   })
   return localRuntimeExecutor({
     item,
@@ -1073,57 +1011,23 @@ async function commandFriendMessage(args) {
   const text = requireArg(args.text, '--text is required')
   const ownerLanguage = inferOwnerFacingLanguage(text)
   const ownerTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-  let skillHint = 'friend-im'
   const skillFile = clean(args['skill-file'])
   const sharedSkill = skillFile ? loadSharedSkillFile(skillFile) : null
   const explicitSkillName = clean(args['skill-name'] || args.skill)
-  const skillDecision = await resolveOutboundSkillHint({
-    agentId: context.agentId,
-    keyFile: context.keyFile,
-    args,
-    targetAgentId,
-    text,
-    explicitSkillName,
-    sharedSkill
-  })
-  skillHint = clean(skillDecision.skillHint) || 'friend-im'
+  const skillHint = clean(explicitSkillName) || clean(sharedSkill?.name)
+  const skillDecision = {
+    source: explicitSkillName ? 'explicit' : sharedSkill?.name ? 'shared-skill' : 'none',
+    reason: explicitSkillName ? 'explicit-skill-arg' : sharedSkill?.name ? 'shared-skill-file' : 'no-skill-hint'
+  }
   const conversationPolicy = resolveConversationPolicy(skillHint, sharedSkill)
   const conversationKey = randomRequestId('conversation')
   const sentAt = new Date().toISOString()
-  let localSkillInventorySnapshot = ''
-  if (skillHint === 'agent-mutual-learning') {
-    try {
-      const hostContext = await resolveCliOpenClawHostContext({
-        agentId: context.agentId,
-        keyFile: context.keyFile,
-        args,
-        purpose: 'mutual-learning local skill inventory'
-      })
-      const inspectedLocalSkills = await inspectOpenClawLocalSkills({
-        localAgentId: context.agentId,
-        openclawAgent: hostContext.resolvedOpenClawAgent,
-        command: hostContext.openclawCommand,
-        cwd: hostContext.openclawCwd,
-        configPath: hostContext.openclawConfigPath,
-        stateDir: hostContext.openclawStateDir,
-        timeoutMs: 60000,
-        gatewayUrl: hostContext.openclawGatewayUrl,
-        gatewayToken: hostContext.openclawGatewayToken,
-        gatewayPassword: hostContext.openclawGatewayPassword,
-        purpose: `sender-${conversationKey}`
-      })
-      localSkillInventorySnapshot = clean(inspectedLocalSkills.inventoryPromptText)
-    } catch {
-      localSkillInventorySnapshot = ''
-    }
-  }
   const outboundText = buildSkillOutboundText({
     localAgentId: context.agentId,
     targetAgentId,
     skillName: skillHint,
     originalText: text,
-    sentAt,
-    localSkillInventory: localSkillInventorySnapshot
+    sentAt
   })
   let result
   const turnLog = []
@@ -1151,8 +1055,7 @@ async function commandFriendMessage(args) {
         },
         metadata: {
           ...(sharedSkill ? { sharedSkill } : {}),
-        originalOwnerText: turnIndex === 1 ? text : currentOutboundText,
-          ...(turnIndex === 1 && localSkillInventorySnapshot ? { localSkillInventory: localSkillInventorySnapshot } : {}),
+          originalOwnerText: turnIndex === 1 ? text : currentOutboundText,
           conversationKey,
           sentAt,
           turnIndex: currentOutboundControl.turnIndex,
@@ -1219,7 +1122,6 @@ async function commandFriendMessage(args) {
           sharedSkill,
           inboundText: replyText,
           originalOwnerText: text,
-          localSkillInventory: localSkillInventorySnapshot,
           turnIndex: nextTurnIndex,
           remoteControl
         })
@@ -1324,42 +1226,8 @@ async function commandFriendMessage(args) {
   })
   let summarizedOverall = ''
   let summarizedDetailedConversation = []
-  let summarizedDifferentiatedSkills = []
-  if (skillHint === 'agent-mutual-learning') {
-    try {
-      const hostContext = await resolveCliOpenClawHostContext({
-        agentId: context.agentId,
-        keyFile: context.keyFile,
-        args,
-        purpose: 'mutual-learning conversation summary'
-      })
-      const summarized = await summarizeOpenClawConversation({
-        localAgentId: context.agentId,
-        remoteAgentId: targetAgentId,
-        selectedSkill: skillHint,
-        originalOwnerText: text,
-        turnLog,
-        localSkillInventory: localSkillInventorySnapshot,
-        openclawAgent: hostContext.resolvedOpenClawAgent,
-        command: hostContext.openclawCommand,
-        cwd: hostContext.openclawCwd,
-        configPath: hostContext.openclawConfigPath,
-        stateDir: hostContext.openclawStateDir,
-        timeoutMs: 60000,
-        gatewayUrl: hostContext.openclawGatewayUrl,
-        gatewayToken: hostContext.openclawGatewayToken,
-        gatewayPassword: hostContext.openclawGatewayPassword
-      })
-      summarizedOverall = clean(summarized.overallSummary)
-      summarizedDetailedConversation = Array.isArray(summarized.detailedConversation)
-        ? summarized.detailedConversation.map((item) => clean(item)).filter(Boolean)
-        : []
-      summarizedDifferentiatedSkills = Array.isArray(summarized.differentiatedSkills)
-        ? summarized.differentiatedSkills.map((item) => clean(item)).filter(Boolean)
-        : []
-    } catch (error) {
-      continuationError = continuationError || `conversation-summary-failed: ${clean(error?.message) || 'unknown error'}`
-    }
+  if (turnLog.length > 0) {
+    summarizedOverall = excerpt(replyText || turnLog.at(-1)?.replyText || '', 240)
   }
   const defaultTurnOutline = turnLog.map((turn) => {
     const outbound = excerpt(turn.outboundText, 120)
@@ -1375,12 +1243,6 @@ async function commandFriendMessage(args) {
     }
   })
   const actionItems = []
-  if (skillHint === 'agent-mutual-learning' && clean(localSkillInventorySnapshot)) {
-    actionItems.push('Prepared a verified local skill snapshot before starting the exchange and used it as the baseline for comparison.')
-  }
-  for (const item of summarizedDifferentiatedSkills) {
-    actionItems.push(`Different skill or workflow identified: ${item}.`)
-  }
   const senderReport = buildSenderBaseReport({
     localAgentId: context.agentId,
     targetAgentId,

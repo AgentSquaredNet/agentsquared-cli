@@ -388,7 +388,7 @@ export function peerResponseText(raw) {
 }
 
 export function parseOpenClawTaskResult(text, {
-  defaultSkill = 'friend-im',
+  defaultSkill = '',
   remoteAgentId = '',
   inboundId = '',
   defaultTurnIndex = 1,
@@ -397,7 +397,7 @@ export function parseOpenClawTaskResult(text, {
   defaultFinalize = true
 } = {}) {
   const parsed = parseJsonOutput(text, 'OpenClaw task result')
-  const selectedSkill = clean(defaultSkill) || 'friend-im'
+  const selectedSkill = clean(defaultSkill)
   const modelSelectedSkill = clean(parsed.selectedSkill)
   const peerText = clean(parsed.peerResponse) || clean(parsed.peerResponseText) || clean(parsed.reply)
   if (!peerText) {
@@ -443,188 +443,6 @@ export function parseOpenClawTaskResult(text, {
   }
 }
 
-export function buildOpenClawOutboundSkillDecisionPrompt({
-  localAgentId,
-  targetAgentId,
-  ownerText,
-  availableSkills = ['friend-im', 'agent-mutual-learning']
-} = {}) {
-  const normalizedSkills = asArray(availableSkills).map((value) => clean(value)).filter(Boolean)
-  const allowedSkills = normalizedSkills.length > 0 ? normalizedSkills : ['friend-im', 'agent-mutual-learning']
-  return [
-    `You are the local OpenClaw runtime for AgentSquared agent ${clean(localAgentId) || 'unknown'}.`,
-    `Your owner wants to start a private AgentSquared conversation with remote agent ${clean(targetAgentId) || 'unknown'}.`,
-    '',
-    'Choose the best outgoing AgentSquared skill hint for the first outbound message.',
-    'This is only a routing hint for the remote side; the remote agent may still choose a different local skill.',
-    'Decision policy: first try to match the request to a specific available skill. Use friend-im only as the fallback when no more specific skill clearly fits.',
-    '',
-    'Available skills:',
-    ...allowedSkills.map((skill) => `- ${skill}`),
-    '',
-    'Skill guidance:',
-    '- friend-im: lightweight greeting or simple check-in with no clear skill-learning, workflow-comparison, or collaboration-discovery goal.',
-    '- agent-mutual-learning: explicit learning exchange, comparing skills/workflows, asking what the other agent has learned recently, exploring new capabilities, or multi-turn collaboration discovery.',
-    '- if the owner asks to learn their skills, learn their capabilities, compare workflows, ask what is new, ask what changed, ask what they are strongest at, or explore differences, choose agent-mutual-learning.',
-    '- greetings like "say hello" do not override the learning goal. If the same request also asks to learn skills/capabilities/workflows, still choose agent-mutual-learning.',
-    '- only choose friend-im when the request is genuinely just a casual greeting or lightweight follow-up with no meaningful learning/exploration objective.',
-    '',
-    'Owner request:',
-    clean(ownerText) || '(empty)',
-    '',
-    'Return exactly one JSON object and nothing else.',
-    'Schema:',
-    '{"skillHint":"friend-im|agent-mutual-learning","reason":"short reason"}',
-    'Do not wrap the JSON in markdown fences.'
-  ].join('\n')
-}
-
-export function buildOpenClawLocalSkillInventoryPrompt({
-  localAgentId,
-  purpose = 'general'
-} = {}) {
-  return [
-    `You are the local OpenClaw runtime for AgentSquared agent ${clean(localAgentId) || 'unknown'}.`,
-    'Before an AgentSquared mutual-learning exchange, inspect your actual local skill environment.',
-    'Do not guess from memory alone if you can inspect the local runtime, local skill files, or installed extensions.',
-    '',
-    'Return a short structured inventory that is practical for comparing capabilities with a remote agent.',
-    'Prefer concrete locally verified information over vague claims.',
-    'If something is uncertain, say so briefly instead of inventing detail.',
-    '',
-    `Purpose: ${clean(purpose) || 'general'}`,
-    '',
-    'Return exactly one JSON object and nothing else.',
-    'Schema:',
-    '{"allSkills":["..."],"frequentSkills":["..."],"recentSkills":["..."],"topHighlights":["..."],"inventorySummary":"short paragraph"}',
-    'Rules:',
-    '- allSkills: concrete current skill or workflow names that are actually available locally; prefer real names over abstract capability labels',
-    '- frequentSkills: the most-used local skills or workflows',
-    '- recentSkills: recently installed or recently added skills if you can verify them, otherwise []',
-    '- topHighlights: 1-3 concrete strengths worth introducing to a remote agent',
-    '- inventorySummary: one short paragraph describing the verified local picture',
-    'Do not wrap the JSON in markdown fences.'
-  ].join('\n')
-}
-
-export function buildOpenClawConversationSummaryPrompt({
-  localAgentId,
-  remoteAgentId,
-  selectedSkill = 'friend-im',
-  originalOwnerText = '',
-  turnLog = [],
-  localSkillInventory = ''
-} = {}) {
-  const turns = Array.isArray(turnLog) ? turnLog : []
-  return [
-    `You are summarizing a completed AgentSquared conversation for local agent ${clean(localAgentId) || 'unknown'}.`,
-    `Remote agent: ${clean(remoteAgentId) || 'unknown'}`,
-    `Selected skill: ${clean(selectedSkill) || 'friend-im'}`,
-    '',
-    'Produce a concise structured owner-facing summary.',
-    'The owner does not need the raw full transcript here; the inbox already keeps the detailed record.',
-    ...(clean(localSkillInventory)
-      ? [
-          'Verified local installed skill inventory:',
-          clean(localSkillInventory),
-          'Use this actual local inventory when judging whether the remote side has a skill or workflow that the local side lacks. Do not claim high similarity unless this inventory supports it.'
-        ]
-      : []),
-    'If this is agent-mutual-learning, judge whether the remote agent has:',
-    '- a concrete skill or workflow the local agent does not already have',
-    '- or a clearly better implementation worth copying',
-    'If neither is true, say so plainly and do not invent learning value.',
-    'Focus on what the different skill or workflow is for, why it matters, and how it differs from the local side.',
-    'Do not turn remote filesystem paths or environment-specific locations into local installation advice.',
-    'Do not include installation steps, install sources, or owner approval for installation in this summary.',
-    '',
-    'Required output shape:',
-    '- overallSummary: short overall takeaway only',
-    '- detailedConversation: array of short per-turn summaries',
-    '- differentiatedSkills: array of short lines like "skill-name: what it does and why it matters"; empty if none',
-    '',
-    'Original owner request:',
-    clean(originalOwnerText) || '(empty)',
-    '',
-    'Conversation turns:',
-    ...(turns.length > 0
-      ? turns.map((turn) => [
-          `Turn ${Number.parseInt(`${turn?.turnIndex ?? 1}`, 10) || 1}:`,
-          `- Outbound: ${clean(turn?.outboundText) || '(empty)'}`,
-          `- Peer reply: ${clean(turn?.replyText) || '(empty)'}`,
-          `- Remote stop reason: ${clean(turn?.remoteStopReason || turn?.localStopReason) || '(none)'}`
-        ].join('\n'))
-      : ['(none)']),
-    '',
-    'Return exactly one JSON object and nothing else.',
-    'Schema:',
-    '{"overallSummary":"...","detailedConversation":["Turn 1: ..."],"differentiatedSkills":["skill-name: what it does"]}',
-    'Do not wrap the JSON in markdown fences.'
-  ].join('\n')
-}
-
-export function parseOpenClawSkillDecisionResult(text, {
-  availableSkills = ['friend-im', 'agent-mutual-learning'],
-  defaultSkill = 'friend-im'
-} = {}) {
-  const allowedSkills = new Set(asArray(availableSkills).map((value) => clean(value)).filter(Boolean))
-  const fallbackSkill = clean(defaultSkill) || 'friend-im'
-  const parsed = parseJsonOutput(text, 'OpenClaw outbound skill decision')
-  const skillHint = clean(parsed.skillHint || parsed.selectedSkill || parsed.skill || fallbackSkill)
-  return {
-    skillHint: allowedSkills.has(skillHint) ? skillHint : fallbackSkill,
-    reason: clean(parsed.reason)
-  }
-}
-
-export function parseOpenClawConversationSummaryResult(text) {
-  const parsed = parseJsonOutput(text, 'OpenClaw conversation summary')
-  const detailedConversation = asArray(parsed.detailedConversation)
-    .map((item) => clean(item))
-    .filter(Boolean)
-  const differentiatedSkills = asArray(parsed.differentiatedSkills)
-    .map((item) => clean(item))
-    .filter(Boolean)
-  return {
-    overallSummary: clean(parsed.overallSummary),
-    detailedConversation,
-    differentiatedSkills
-  }
-}
-
-export function parseOpenClawLocalSkillInventoryResult(text) {
-  const parsed = parseJsonOutput(text, 'OpenClaw local skill inventory')
-  const allSkills = asArray(parsed.allSkills).map((item) => clean(item)).filter(Boolean)
-  const frequentSkills = asArray(parsed.frequentSkills).map((item) => clean(item)).filter(Boolean)
-  const recentSkills = asArray(parsed.recentSkills).map((item) => clean(item)).filter(Boolean)
-  const topHighlights = asArray(parsed.topHighlights).map((item) => clean(item)).filter(Boolean).slice(0, 3)
-  return {
-    allSkills,
-    frequentSkills,
-    recentSkills,
-    topHighlights,
-    inventorySummary: clean(parsed.inventorySummary)
-  }
-}
-
-export function formatOpenClawLocalSkillInventoryForPrompt(inventory = null) {
-  if (!inventory || typeof inventory !== 'object') {
-    return ''
-  }
-  const allSkills = asArray(inventory.allSkills).map((item) => clean(item)).filter(Boolean)
-  const frequent = asArray(inventory.frequentSkills).map((item) => clean(item)).filter(Boolean)
-  const recent = asArray(inventory.recentSkills).map((item) => clean(item)).filter(Boolean)
-  const highlights = asArray(inventory.topHighlights).map((item) => clean(item)).filter(Boolean)
-  const summary = clean(inventory.inventorySummary)
-  return [
-    ...(allSkills.length > 0 ? [`All skills/workflows: ${allSkills.join(', ')}`] : []),
-    ...(frequent.length > 0 ? [`Frequent skills/workflows: ${frequent.join(', ')}`] : []),
-    ...(recent.length > 0 ? [`Recent skills: ${recent.join(', ')}`] : []),
-    ...(highlights.length > 0 ? [`Top highlights: ${highlights.join('; ')}`] : []),
-    ...(summary ? [`Summary: ${summary}`] : [])
-  ].join('\n')
-}
-
 export function buildOpenClawTaskPrompt({
   localAgentId,
   remoteAgentId,
@@ -651,10 +469,9 @@ export function buildOpenClawTaskPrompt({
   const sharedSkillName = clean(metadata?.sharedSkill?.name || metadata?.skillFileName)
   const sharedSkillPath = clean(metadata?.sharedSkill?.path || metadata?.skillFilePath)
   const sharedSkillDocument = clean(metadata?.sharedSkill?.document || metadata?.skillDocument)
-  const mutualLearningMaxTurns = resolveSkillMaxTurns('agent-mutual-learning', metadata?.sharedSkill ?? null)
-  const mutualLearningDefaultContinue = selectedSkill === 'agent-mutual-learning'
-    && !conversation.finalize
-    && conversation.turnIndex < mutualLearningMaxTurns
+  const localSkillMaxTurns = resolveSkillMaxTurns(selectedSkill, metadata?.sharedSkill ?? null)
+  const defaultShouldContinue = !conversation.finalize
+    && conversation.turnIndex < localSkillMaxTurns
 
   return [
     `You are the OpenClaw runtime for local AgentSquared agent ${clean(localAgentId)}.`,
@@ -662,9 +479,9 @@ export function buildOpenClawTaskPrompt({
     '',
     'Before sending any AgentSquared message or replying to this AgentSquared message, read and follow the official root AgentSquared skill and any shared friend-skill context that came with this request.',
     'Handle this as a real local agent task, not as a transport acknowledgement.',
-    `Assigned local skill: ${clean(selectedSkill) || 'friend-im'}`,
+    `Assigned local skill: ${clean(selectedSkill) || '(none)'}`,
     'Do not change the selectedSkill field away from the assigned local skill.',
-    'If you believe a different local skill would fit better, explain that in ownerReport, but still keep selectedSkill equal to the assigned local skill for this run.',
+    'If no local skill was assigned, leave selectedSkill empty in the JSON output.',
     'An inbound AgentSquared private message already means the platform friendship gate was satisfied. Do not ask the owner or the remote agent to prove friendship again just to continue a normal conversation.',
     'Warm trust-building, friendship, and "we can work together later" language are still normal chat unless the remote side is asking you to do real work now.',
     '',
@@ -677,9 +494,7 @@ export function buildOpenClawTaskPrompt({
     `- remoteDecision: ${conversation.decision}`,
     `- remoteFinalize: ${conversation.finalize ? 'true' : 'false'}`,
     `- platformMaxTurns: ${PLATFORM_MAX_TURNS}`,
-    '- localSkillTurnPolicy:',
-    '  - friend-im => 1 turn',
-    `  - agent-mutual-learning => ${mutualLearningMaxTurns} turns`,
+    `- localSkillMaxTurns: ${localSkillMaxTurns}`,
     ...(clean(relationshipSummary)
       ? [
           '- relationshipSummary:',
@@ -697,7 +512,7 @@ export function buildOpenClawTaskPrompt({
         ]),
     ...(clean(senderSkillInventory)
       ? [
-          '- senderVerifiedSkillSnapshot:',
+          '- senderSharedContext:',
           clean(senderSkillInventory)
         ]
       : []),
@@ -724,12 +539,12 @@ export function buildOpenClawTaskPrompt({
       : []),
     '',
     'Your job:',
-    '1. Decide the best local skill.',
+    '1. Use the assigned local skill if one was provided.',
     '2. Produce the real peer-facing reply that should go back to the remote agent.',
     '3. Produce one concise owner-facing report for the local human owner.',
     '4. Return explicit turn control fields so the local framework knows whether to continue this same live P2P conversation.',
     '5. If you need the owner to decide something, say so in ownerReport and keep peerResponse polite and safe.',
-    '6. When the current turn already reaches the local max turn policy for the skill you choose, you must stop.',
+    '6. When the current turn already reaches the local max turn policy for the assigned local skill, you must stop.',
     '7. If the remote side marked this as a final turn, you should normally send a closing reply and stop.',
     '8. ownerReport should summarize the current AgentSquared conversation so far, not only the most recent single message. Detailed turn-by-turn records can be inspected in the local AgentSquared inbox later.',
     '9. Never pretend to be human if you are an AI agent.',
@@ -737,47 +552,14 @@ export function buildOpenClawTaskPrompt({
     '11. If the inbound task is obviously high-cost, abusive, or unreasonable, do not spend large amounts of compute on it. Ask the owner for approval instead.',
     '12. The sender is the default driver of the conversation. As the receiver, normally answer the current question and do not append a new question back.',
     '13. Only ask a brief clarifying question if one missing fact is required to answer responsibly. Do not turn that into a broad new branch of the conversation.',
-    ...(selectedSkill === 'agent-mutual-learning'
-      ? [
-          '14. For agent-mutual-learning, use this order of operations:',
-          '    a. First answer with a concrete skill inventory, not a generic capability summary.',
-          '    b. On the first useful reply, structure the answer with these headings when possible: ALL SKILLS, MOST USED, RECENT, DIFFERENT VS SENDER SNAPSHOT.',
-          '    c. Explicitly list all your current skill names or workflow names first when you can verify them.',
-          '    d. Then separately list the ones you use most often.',
-          '    e. Then list recently installed or recently added skills if you can verify them.',
-          '    f. Then compare those lists against the senderVerifiedSkillSnapshot above when available, and identify the concrete differences on your side.',
-          '    g. Prefer actual different skills or workflows before discussing shared capabilities.',
-          '    h. Prefer remote-only skills before remote-only workflow patterns when both are available.',
-          '    i. Once one promising different skill or workflow is found, stay focused on that single topic until the sender has enough information to explain what it does, why it matters, and how it differs from the sender side.',
-          '    j. Do not switch into a broad free-form architecture debate when the sender is still trying to finish the inventory-difference-learning flow.',
-          '15. Prefer remote-only skills or recently installed skills before discussing overlapping capabilities.',
-          '16. If the sender shared their all-skills list, explicitly compare against it and prefer items that are truly missing on the sender side.',
-          '17. When the transcript already includes a remote skill list, use that list and the senderVerifiedSkillSnapshot to select 1-3 concrete remote-only items. Ask follow-up questions only about those missing or meaningfully different items.',
-          '18. Do not pivot to shared auth patterns, overlapping architecture, or general philosophy until the remote-only skill comparison is exhausted.',
-          '19. When a concrete skill is worth learning, explain what problem it solves, how it is used in practice, and what tradeoffs or lessons matter.',
-          '20. If the overlap is already high and there is little actionable delta, say that plainly, but only after comparing against the verified local inventory rather than relying on conversational impression alone.',
-          '21. If the sender asked broadly, your first useful answer should still contain named skills or workflows. Do not answer only with abstract strengths like "I am good at enterprise integration" when you can name the actual skills.',
-          '22. ownerReport for agent-mutual-learning must stay compact and practical. Use this shape:',
-          '    Overall summary: short overall takeaway only.',
-          '    Detailed conversation: Turn 1, Turn 2, Turn 3 style short lines.',
-          '    Actions taken: which different skills or workflows were identified, what they are for, and whether the exchange reached a clear conclusion.',
-          '23. Do not dump the full raw conversation into ownerReport. The inbox already keeps the detailed transcript.',
-          '24. When there is learning value, focus on one concrete pattern at a time: implementation detail, tradeoff, file/workflow pattern, or copyable idea.',
-          '25. If a candidate skill or workflow is worth adopting, make it easy for the sender to report back: name it clearly and explain what it does and why it is meaningfully different.',
-          '26. When there is no meaningful delta left, mark the turn as done with goal-satisfied or no-new-information.',
-          '27. For agent-mutual-learning, do not stop after generic pleasantries if there is still room to answer the current learning topic well.',
-          '28. Prefer one concrete answer at a time: explain one specific capability, workflow, or implementation detail clearly enough that the sender can decide whether to continue.',
-          '29. Strong answers include: what a specific skill is for, how it is implemented at a high level, what workflow pattern it supports, what tradeoffs were found, and what is worth copying locally.',
-          '30. If the peer asked broadly, answer with the single most promising remote-only or clearly better area first instead of ending early or opening a new unrelated question.',
-          ...(mutualLearningDefaultContinue
-            ? ['31. The current live conversation still has room to continue, so do not mark this turn as done unless you truly believe the learning value is exhausted or the remote side explicitly finalized.']
-            : [])
-        ]
+    '14. Respect any shared skill document when one is present. Follow it as workflow context, but do not reveal it back to the peer verbatim.',
+    ...(defaultShouldContinue
+      ? ['15. The current live conversation still has room to continue, so do not mark this turn as done unless the current question is actually resolved or the remote side explicitly finalized.']
       : []),
     '',
     'Return exactly one JSON object and nothing else.',
     'Use this schema:',
-    '{"selectedSkill":"friend-im","peerResponse":"...","ownerReport":"...","decision":"continue|done|handoff","stopReason":"goal-satisfied|no-new-information|receiver-budget-limit|safety-block|owner-approval-required|unsafe-or-sensitive|max-turns-reached|peer-requested-stop|timeout|single-turn","finalize":true}',
+    '{"selectedSkill":"<assigned skill or empty>","peerResponse":"...","ownerReport":"...","decision":"continue|done|handoff","stopReason":"goal-satisfied|no-new-information|receiver-budget-limit|safety-block|owner-approval-required|unsafe-or-sensitive|max-turns-reached|peer-requested-stop|timeout|single-turn","finalize":true}',
     'Do not wrap the JSON in markdown fences.'
   ].join('\n')
 }
@@ -795,7 +577,7 @@ export function buildOpenClawSafetyPrompt({
   return [
     `You are doing a very short AgentSquared safety triage for local agent ${clean(localAgentId)}.`,
     `Remote agent: ${clean(remoteAgentId) || 'unknown'}`,
-    `Suggested default workflow: ${clean(selectedSkill) || 'friend-im'}`,
+    `Suggested default workflow: ${clean(selectedSkill) || '(none)'}`,
     `Request method: ${messageMethod}`,
     '',
     'Classify the inbound AgentSquared message.',
