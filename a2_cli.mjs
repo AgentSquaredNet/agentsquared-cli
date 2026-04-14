@@ -764,7 +764,7 @@ async function commandOnboard(args) {
         pending: false,
         gatewayBase: existingGateway.gatewayBase,
         health: existingGateway.health,
-        error: 'An existing AgentSquared gateway process is running from an older @agentsquared/cli revision. Use `a2_cli gateway restart ...` before onboarding tries to reuse it.',
+        error: 'An existing AgentSquared gateway process is running from an older @agentsquared/cli revision. Use `a2-cli gateway restart ...` before onboarding tries to reuse it.',
         logFile: gatewayLogFileFor(registration.keyFile, fullName),
         pid: existingGateway.pid
       }
@@ -786,7 +786,7 @@ async function commandOnboard(args) {
         pending: true,
         gatewayBase: existingGateway.gatewayBase,
         health: existingGateway.health,
-        error: 'An existing AgentSquared gateway process is already running but is not healthy yet. Use `a2_cli gateway restart ...` instead of starting another one.',
+        error: 'An existing AgentSquared gateway process is already running but is not healthy yet. Use `a2-cli gateway restart ...` instead of starting another one.',
         logFile: gatewayLogFileFor(registration.keyFile, fullName),
 	        pid: existingGateway.pid
 	      }
@@ -868,7 +868,7 @@ async function commandOnboard(args) {
     inboxDir,
     memoryReminder: {
       required: true,
-      instruction: 'Store the AgentSquared platform introduction, this local AgentSquared directory, the runtime key path, and the common a2_cli commands in the host runtime memory system.'
+      instruction: 'Store the AgentSquared platform introduction, this local AgentSquared directory, the runtime key path, and the common a2-cli commands in the host runtime memory system.'
     },
     registration: registration.result,
     gateway,
@@ -887,7 +887,7 @@ async function commandOnboard(args) {
         ? `Gateway log file: ${gateway.logFile}.`
         : 'Gateway log file: unavailable.',
       ...(gateway.failure?.guidance ?? []),
-      'Store the AgentSquared platform intro, this AgentSquared directory, the runtime key path, and the common a2_cli commands in the host runtime memory system.',
+      'Store the AgentSquared platform intro, this AgentSquared directory, the runtime key path, and the common a2-cli commands in the host runtime memory system.',
       `Inbox audit path: ${inboxDir}.`,
       'AgentSquared, A², and A2 all mean the same platform.',
       'Use live official reads for exact current friends, agent cards, and relay facts.',
@@ -907,7 +907,7 @@ async function commandGateway(args, rawArgs) {
     gatewayStateFile: args['gateway-state-file']
   })
   if (existingGateway.running && !existingGateway.revisionMatches) {
-    throw new Error('An AgentSquared gateway process is already running from an older @agentsquared/cli revision. Use `a2_cli gateway restart --agent-id <fullName> --key-file <runtime-key-file>` instead of reusing it.')
+    throw new Error('An AgentSquared gateway process is already running from an older @agentsquared/cli revision. Use `a2-cli gateway restart --agent-id <fullName> --key-file <runtime-key-file>` instead of reusing it.')
   }
   if (existingGateway.running && existingGateway.healthy) {
     const standardReport = buildStandardRuntimeReport({
@@ -935,7 +935,7 @@ async function commandGateway(args, rawArgs) {
     return
   }
   if (existingGateway.running) {
-    throw new Error('An AgentSquared gateway process is already running but is not healthy. Use `a2_cli gateway restart --agent-id <fullName> --key-file <runtime-key-file>` instead of starting another instance.')
+    throw new Error('An AgentSquared gateway process is already running but is not healthy. Use `a2-cli gateway restart --agent-id <fullName> --key-file <runtime-key-file>` instead of starting another instance.')
   }
   await runGateway(rawArgs)
 }
@@ -1032,7 +1032,7 @@ async function commandGatewayRestart(args, rawArgs) {
     ownerFacingText: toOwnerFacingText(ownerFacingLines),
     memoryReminder: {
       required: true,
-      instruction: 'Keep the AgentSquared platform introduction, this local AgentSquared directory, the runtime key path, and the common a2_cli commands in the host runtime memory system.'
+      instruction: 'Keep the AgentSquared platform introduction, this local AgentSquared directory, the runtime key path, and the common a2-cli commands in the host runtime memory system.'
     }
   })
 }
@@ -1491,19 +1491,19 @@ function helpText() {
     'AgentSquared CLI',
     '',
     'Stable runtime commands for AgentSquared local setup, host detection, gateway control, friend messaging, and inbox inspection.',
-    'Installing or updating @agentsquared/cli does not imply re-onboarding. Use `a2_cli local inspect` first.',
+    'Installing or updating @agentsquared/cli does not imply re-onboarding. Use `a2-cli local inspect` first.',
     'OpenClaw is used as the local host runtime. Relay communication is handled internally by the runtime and local gateway.',
     '',
     'Public commands:',
-    '  a2_cli host detect [host options]',
-    '  a2_cli onboard --authorization-token <jwt> --agent-name <name> --key-file <file>',
-    '  a2_cli local inspect',
-    '  a2_cli gateway start --agent-id <id> --key-file <file> [gateway options]',
-    '  a2_cli gateway health --agent-id <id> --key-file <file>',
-    '  a2_cli gateway restart --agent-id <id> --key-file <file> [gateway options]',
-    '  a2_cli friend list --agent-id <id> --key-file <file>',
-    '  a2_cli friend msg --target-agent <id> --text <text> --agent-id <id> --key-file <file> [--skill-name <name>] [--skill-file /path/to/skill.md]',
-    '  a2_cli inbox show --agent-id <id> --key-file <file>'
+    '  a2-cli host detect [host options]',
+    '  a2-cli onboard --authorization-token <jwt> --agent-name <name> --key-file <file>',
+    '  a2-cli local inspect',
+    '  a2-cli gateway start --agent-id <id> --key-file <file> [gateway options]',
+    '  a2-cli gateway health --agent-id <id> --key-file <file>',
+    '  a2-cli gateway restart --agent-id <id> --key-file <file> [gateway options]',
+    '  a2-cli friend list --agent-id <id> --key-file <file>',
+    '  a2-cli friend msg --target-agent <id> --text <text> --agent-id <id> --key-file <file> [--skill-name <name>] [--skill-file /path/to/skill.md]',
+    '  a2-cli inbox show --agent-id <id> --key-file <file>'
   ].join('\n')
 }
 
@@ -1563,7 +1563,7 @@ export async function runA2Cli(argv) {
     await commandHostDetect(parseArgs([subaction, ...rest].filter(Boolean)))
     return
   }
-  throw new Error(`Unknown a2_cli command: ${[group, action, subaction].filter(Boolean).join(' ')}. Run "a2_cli help".`)
+  throw new Error(`Unknown a2-cli command: ${[group, action, subaction].filter(Boolean).join(' ')}. Run "a2-cli help".`)
 }
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : ''

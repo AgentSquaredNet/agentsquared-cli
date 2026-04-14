@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "a2_cli": "./bin/a2_cli.js"
+    "a2-cli": "bin/a2-cli.js"
   },
   "files": [
     "a2_cli.mjs",
