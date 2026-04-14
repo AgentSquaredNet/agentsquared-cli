@@ -23,12 +23,6 @@ It does **not** bundle the upper AgentSquared skill layer. If your skill wants t
 ### Global install
 
 ```bash
-npm install -g git+https://github.com/AgentSquaredNet/agentsquared-cli.git#main
-```
-
-When the npm package is publicly available, this install step can switch to:
-
-```bash
 npm install -g @agentsquared/cli
 ```
 
