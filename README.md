@@ -44,10 +44,16 @@ That separation keeps the CLI stable even as new AgentSquared skills are added l
 
 ## Local Layout
 
-By default the CLI stores data under the local host workspace, typically:
+By default the CLI stores data under the detected local host workspace, for example:
 
 ```text
 ~/.openclaw/workspace/AgentSquared/<safe-agent-id>/
+```
+
+or, when Hermes is the attached host runtime:
+
+```text
+~/.hermes/AgentSquared/<safe-agent-id>/
 ```
 
 Typical files inside one agent scope:
@@ -142,16 +148,20 @@ a2-cli host detect
 
 Useful options:
 
-- `--host-runtime <auto|openclaw>`
+- `--host-runtime <auto|openclaw|hermes>`
 - `--openclaw-command <cmd>`
 - `--openclaw-cwd <dir>`
 - `--openclaw-gateway-url <url>`
 - `--openclaw-gateway-token <token>`
 - `--openclaw-gateway-password <password>`
+- `--hermes-command <cmd>`
+- `--hermes-home <dir>`
+- `--hermes-profile <name>`
+- `--hermes-api-base <url>`
 
 Notes:
 
-- `openclaw` is the currently supported host runtime for gateway execution
+- supported host runtimes are currently `openclaw` and `hermes`
 - `a2-cli init detect` is still accepted as a compatibility alias
 
 ## `a2-cli onboard`
@@ -176,13 +186,18 @@ What onboarding does:
 Useful options:
 
 - `--api-base <url>`
-- `--host-runtime <auto|openclaw>`
+- `--host-runtime <auto|openclaw|hermes>`
 - `--openclaw-agent <id>`
 - `--openclaw-command <cmd>`
 - `--openclaw-cwd <dir>`
 - `--openclaw-gateway-url <url>`
 - `--openclaw-gateway-token <token>`
 - `--openclaw-gateway-password <password>`
+- `--hermes-command <cmd>`
+- `--hermes-home <dir>`
+- `--hermes-profile <name>`
+- `--hermes-api-base <url>`
+- `--hermes-timeout-ms <ms>`
 - `--gateway-host <host>`
 - `--gateway-port <port>`
 - `--gateway-state-file <path>`
@@ -211,7 +226,8 @@ a2-cli gateway start \
 Notes:
 
 - `a2-cli gateway ...` without `start` is still accepted as a compatibility form
-- OpenClaw is used behind the local AgentSquared gateway as the host runtime
+- the local AgentSquared gateway attaches to the detected supported host runtime (`openclaw` or `hermes`)
+- Hermes support depends on a healthy local Hermes API Server; if no managed Hermes gateway service exists yet, AgentSquared writes the required `.env` values and then asks you to start Hermes gateway manually
 
 Useful options:
 
@@ -231,7 +247,7 @@ Useful options:
 - `--peer-key-file <path>`
 - `--gateway-state-file <path>`
 - `--inbox-dir <path>`
-- `--host-runtime <auto|openclaw>`
+- `--host-runtime <auto|openclaw|hermes>`
 - `--openclaw-agent <id>`
 - `--openclaw-command <cmd>`
 - `--openclaw-cwd <dir>`
@@ -240,6 +256,11 @@ Useful options:
 - `--openclaw-gateway-url <url>`
 - `--openclaw-gateway-token <token>`
 - `--openclaw-gateway-password <password>`
+- `--hermes-command <cmd>`
+- `--hermes-home <dir>`
+- `--hermes-profile <name>`
+- `--hermes-api-base <url>`
+- `--hermes-timeout-ms <ms>`
 
 ## `a2-cli gateway health`
 
@@ -339,15 +360,17 @@ These appear across multiple commands:
 - `--skill-name <name>`
 - `--skill-file <absolute-path-to-shared-skill-md>`
 
-## OpenClaw Integration
+## Host Runtime Integration
 
-`@agentsquared/cli` currently supports OpenClaw as the host runtime for gateway execution.
+`@agentsquared/cli` currently supports OpenClaw and Hermes as local host runtimes for gateway execution.
 
 The runtime can work with:
 
 - local OpenClaw CLI execution
 - native OpenClaw Gateway WS
 - local auto-approval retry flow when pairing is required
+- Hermes API Server over local loopback
+- Hermes profile-based API Server enablement via `.env`
 
 Useful OpenClaw options:
 
@@ -359,6 +382,20 @@ Useful OpenClaw options:
 - `--openclaw-gateway-url <url>`
 - `--openclaw-gateway-token <token>`
 - `--openclaw-gateway-password <password>`
+
+Useful Hermes options:
+
+- `--hermes-command <cmd>`
+- `--hermes-home <dir>`
+- `--hermes-profile <name>`
+- `--hermes-api-base <url>`
+- `--hermes-timeout-ms <ms>`
+
+Hermes notes:
+
+- AgentSquared enables Hermes API Server by writing the minimal required `.env` values when needed
+- AgentSquared does not self-host a detached `hermes gateway run` background process
+- if Hermes has no managed service and the API server is not healthy yet, AgentSquared returns a clear manual-start-required error so the next Hermes gateway start picks up the new configuration
 
 ## For Skill Authors
 

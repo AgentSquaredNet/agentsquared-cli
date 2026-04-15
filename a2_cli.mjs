@@ -11,7 +11,7 @@ import { resolveGatewayBase, defaultGatewayStateFile, readGatewayState, currentR
 import { getFriendDirectory } from './lib/transport/relay_http.mjs'
 import { generateRuntimeKeyBundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
 import { runGateway } from './lib/gateway/server.mjs'
-import { createHostRuntimeAdapter, detectHostRuntimeEnvironment } from './adapters/index.mjs'
+import { SUPPORTED_HOST_RUNTIMES, createHostRuntimeAdapter, detectHostRuntimeEnvironment } from './adapters/index.mjs'
 import { resolveOpenClawAgentSelection } from './adapters/openclaw/detect.mjs'
 import {
   defaultGatewayLogFile,
@@ -95,6 +95,111 @@ function buildOwnerReportDeliveredText(language = 'en') {
   return '🅰️✌️ The final owner-facing AgentSquared report has already been delivered through the current owner channel. Do not send any additional owner-facing reply.'
 }
 
+function defaultSuggestedHostRuntime() {
+  return SUPPORTED_HOST_RUNTIMES.join(' or ')
+}
+
+function buildCliHostOptions(args = {}) {
+  const preferredHostRuntime = clean(args['host-runtime']) || 'auto'
+  const openclawCommand = clean(args['openclaw-command']) || 'openclaw'
+  const openclawCwd = clean(args['openclaw-cwd'])
+  const openclawConfigPath = clean(args['openclaw-config-path'] || process.env.OPENCLAW_CONFIG_PATH)
+  const openclawGatewayUrl = clean(args['openclaw-gateway-url'])
+  const openclawGatewayToken = clean(args['openclaw-gateway-token'])
+  const openclawGatewayPassword = clean(args['openclaw-gateway-password'])
+  const openclawSessionPrefix = clean(args['openclaw-session-prefix']) || 'agentsquared:'
+  const openclawTimeoutMs = Math.max(1000, Number.parseInt(args['openclaw-timeout-ms'] ?? `${process.env.OPENCLAW_TIMEOUT_MS ?? '180000'}`, 10) || 180000)
+  const hermesCommand = clean(args['hermes-command']) || 'hermes'
+  const hermesHome = clean(args['hermes-home'] || process.env.HERMES_HOME)
+  const hermesProfile = clean(args['hermes-profile'])
+  const hermesApiBase = clean(args['hermes-api-base'])
+  const hermesTimeoutMs = Math.max(1000, Number.parseInt(args['hermes-timeout-ms'] ?? `${process.env.HERMES_TIMEOUT_MS ?? '180000'}`, 10) || 180000)
+  return {
+    preferredHostRuntime,
+    openclaw: {
+      openclawAgent: clean(args['openclaw-agent']),
+      command: openclawCommand,
+      cwd: openclawCwd,
+      configPath: openclawConfigPath,
+      gatewayUrl: openclawGatewayUrl,
+      gatewayToken: openclawGatewayToken,
+      gatewayPassword: openclawGatewayPassword,
+      sessionPrefix: openclawSessionPrefix,
+      timeoutMs: openclawTimeoutMs
+    },
+    hermes: {
+      command: hermesCommand,
+      hermesHome,
+      hermesProfile,
+      apiBase: hermesApiBase,
+      timeoutMs: hermesTimeoutMs
+    }
+  }
+}
+
+function hostRuntimeReady(detectedHostRuntime = null) {
+  const resolved = clean(detectedHostRuntime?.resolved || detectedHostRuntime?.id).toLowerCase()
+  if (!resolved || resolved === 'none') {
+    return false
+  }
+  if (resolved === 'openclaw') {
+    return Boolean(
+      detectedHostRuntime?.rpcHealthy
+      || detectedHostRuntime?.agentsList
+      || detectedHostRuntime?.overviewStatus
+      || detectedHostRuntime?.gatewayHealth
+    )
+  }
+  if (resolved === 'hermes') {
+    return Boolean(detectedHostRuntime?.apiServerHealthy)
+  }
+  return false
+}
+
+function buildHostCoordinationSummary(detectedHostRuntime = null, gatewayHealthPayload = null) {
+  const localGatewayHostRuntime = gatewayHealthPayload?.hostRuntime && typeof gatewayHealthPayload.hostRuntime === 'object'
+    ? gatewayHealthPayload.hostRuntime
+    : null
+  const gatewayStartupChecks = gatewayHealthPayload?.startupChecks && typeof gatewayHealthPayload.startupChecks === 'object'
+    ? gatewayHealthPayload.startupChecks
+    : null
+  const gatewayHostCheck = gatewayStartupChecks?.hostRuntime && typeof gatewayStartupChecks.hostRuntime === 'object'
+    ? gatewayStartupChecks.hostRuntime
+    : null
+  return {
+    detectedHostRuntime,
+    detectedReady: hostRuntimeReady(detectedHostRuntime),
+    gatewayObservedHostRuntime: localGatewayHostRuntime,
+    gatewayObservedReady: Boolean(gatewayHostCheck?.ok),
+    startupCheck: gatewayHostCheck
+  }
+}
+
+function buildGatewayHealthGuidance({
+  detectedHostRuntime = null,
+  hostCoordination = null,
+  gatewayStatus = null
+} = {}) {
+  const guidance = []
+  if (!detectedHostRuntime?.detected) {
+    guidance.push(`Install and configure a supported host runtime (${defaultSuggestedHostRuntime()}) before using AgentSquared.`)
+  } else if (!hostCoordination?.detectedReady) {
+    if (clean(detectedHostRuntime?.resolved) === 'hermes') {
+      guidance.push('Hermes is installed but not ready yet. Ensure Hermes gateway is running and the API server is healthy, then retry.')
+    } else if (clean(detectedHostRuntime?.resolved) === 'openclaw') {
+      guidance.push('OpenClaw is installed but not ready yet. Ensure the OpenClaw gateway is running and reachable, then retry.')
+    }
+  }
+  if (!gatewayStatus?.discovered) {
+    guidance.push('No local AgentSquared gateway state was discovered. Start the AgentSquared gateway with `a2-cli gateway --agent-id <fullName> --key-file <runtime-key-file>` to enable relay-backed messaging.')
+  } else if (gatewayStatus?.running && !gatewayStatus?.healthy) {
+    guidance.push('The local AgentSquared gateway process is running but not healthy. Restart it with `a2-cli gateway restart --agent-id <fullName> --key-file <runtime-key-file>`.')
+  } else if (gatewayStatus?.discovered && !gatewayStatus?.running) {
+    guidance.push('A local AgentSquared gateway profile exists, but the gateway is not running. Start it with `a2-cli gateway --agent-id <fullName> --key-file <runtime-key-file>`.')
+  }
+  return guidance
+}
+
 async function pushCliOwnerReport({
   agentId,
   keyFile,
@@ -105,14 +210,14 @@ async function pushCliOwnerReport({
   deliveryId = ''
 } = {}) {
   try {
-    const hostContext = await resolveCliOpenClawHostContext({
+    const hostContext = await resolveCliHostContext({
       agentId,
       keyFile,
       args,
       purpose: 'AgentSquared owner report delivery'
     })
     const hostAdapter = createHostRuntimeAdapter({
-      hostRuntime: 'openclaw',
+      hostRuntime: hostContext.resolvedHostRuntime,
       localAgentId: agentId,
       openclaw: {
         stateDir: hostContext.openclawStateDir,
@@ -125,10 +230,17 @@ async function pushCliOwnerReport({
         gatewayUrl: hostContext.openclawGatewayUrl,
         gatewayToken: hostContext.openclawGatewayToken,
         gatewayPassword: hostContext.openclawGatewayPassword
+      },
+      hermes: {
+        command: hostContext.hermesCommand,
+        hermesHome: hostContext.hermesHome,
+        hermesProfile: hostContext.hermesProfile,
+        apiBase: hostContext.hermesApiBase,
+        timeoutMs: hostContext.hermesTimeoutMs
       }
     })
     if (!hostAdapter?.pushOwnerReport) {
-      return { delivered: false, attempted: false, mode: 'openclaw', reason: 'host-adapter-missing-push-owner-report' }
+      return { delivered: false, attempted: false, mode: hostContext.resolvedHostRuntime, reason: 'host-adapter-missing-push-owner-report' }
     }
     return await hostAdapter.pushOwnerReport({
       item: {
@@ -142,7 +254,7 @@ async function pushCliOwnerReport({
     return {
       delivered: false,
       attempted: true,
-      mode: 'openclaw',
+      mode: 'host',
       reason: clean(error?.message) || 'owner-report-delivery-failed'
     }
   }
@@ -201,55 +313,49 @@ function resolveConversationPolicy(skillName = '', sharedSkill = null) {
   }
 }
 
-async function resolveCliOpenClawHostContext({
+async function resolveCliHostContext({
   agentId,
   keyFile,
   args,
   purpose = 'AgentSquared local runtime execution'
 }) {
-  const preferredHostRuntime = clean(args['host-runtime']) || 'auto'
-  const openclawCommand = clean(args['openclaw-command']) || 'openclaw'
-  const openclawCwd = clean(args['openclaw-cwd'])
-  const openclawConfigPath = clean(args['openclaw-config-path'] || process.env.OPENCLAW_CONFIG_PATH)
-  const openclawGatewayUrl = clean(args['openclaw-gateway-url'])
-  const openclawGatewayToken = clean(args['openclaw-gateway-token'])
-  const openclawGatewayPassword = clean(args['openclaw-gateway-password'])
-  const openclawSessionPrefix = clean(args['openclaw-session-prefix']) || 'agentsquared:'
+  const hostOptions = buildCliHostOptions(args)
   const detectedHostRuntime = await detectHostRuntimeEnvironment({
-    preferred: preferredHostRuntime,
-    openclaw: {
-      command: openclawCommand,
-      cwd: openclawCwd,
-      configPath: openclawConfigPath,
-      gatewayUrl: openclawGatewayUrl,
-      gatewayToken: openclawGatewayToken,
-      gatewayPassword: openclawGatewayPassword
-    }
+    preferred: hostOptions.preferredHostRuntime,
+    openclaw: hostOptions.openclaw,
+    hermes: hostOptions.hermes
   })
   const resolvedHostRuntime = detectedHostRuntime.resolved || 'none'
-  if (resolvedHostRuntime !== 'openclaw') {
+  if (!detectedHostRuntime.detected || !SUPPORTED_HOST_RUNTIMES.includes(resolvedHostRuntime)) {
     const detected = detectedHostRuntime.resolved || detectedHostRuntime.id || 'none'
     const reason = clean(detectedHostRuntime.reason)
     throw new Error(
-      `${clean(purpose) || 'AgentSquared local runtime execution'} currently supports only the OpenClaw host runtime. Detected host runtime: ${detected}.${reason ? ` Detection reason: ${reason}.` : ''}`
+      `${clean(purpose) || 'AgentSquared local runtime execution'} requires a supported local host runtime (${defaultSuggestedHostRuntime()}). Detected host runtime: ${detected}.${reason ? ` Detection reason: ${reason}.` : ''}`
     )
   }
   const detectedOpenClawAgent = clean(resolveOpenClawAgentSelection(detectedHostRuntime).defaultAgentId)
   const resolvedOpenClawAgent = clean(args['openclaw-agent']) || detectedOpenClawAgent
-  if (!resolvedOpenClawAgent) {
+  if (resolvedHostRuntime === 'openclaw' && !resolvedOpenClawAgent) {
     throw new Error(`OpenClaw was detected for ${clean(purpose).toLowerCase() || 'local runtime execution'}, but no OpenClaw agent id could be resolved.`)
   }
   return {
     detectedHostRuntime,
+    resolvedHostRuntime,
     resolvedOpenClawAgent,
-    openclawCommand,
-    openclawCwd,
-    openclawConfigPath,
-    openclawGatewayUrl,
-    openclawGatewayToken,
-    openclawGatewayPassword,
-    openclawSessionPrefix,
+    openclawCommand: hostOptions.openclaw.command,
+    openclawCwd: hostOptions.openclaw.cwd,
+    openclawConfigPath: hostOptions.openclaw.configPath,
+    openclawGatewayUrl: hostOptions.openclaw.gatewayUrl,
+    openclawGatewayToken: hostOptions.openclaw.gatewayToken,
+    openclawGatewayPassword: hostOptions.openclaw.gatewayPassword,
+    openclawSessionPrefix: hostOptions.openclaw.sessionPrefix,
+    openclawTimeoutMs: hostOptions.openclaw.timeoutMs,
     openclawStateDir: defaultOpenClawStateDir(keyFile, agentId),
+    hermesCommand: hostOptions.hermes.command,
+    hermesHome: clean(detectedHostRuntime.hermesHome) || hostOptions.hermes.hermesHome,
+    hermesProfile: clean(detectedHostRuntime.hermesProfile) || hostOptions.hermes.hermesProfile,
+    hermesApiBase: clean(detectedHostRuntime.apiBase) || hostOptions.hermes.apiBase,
+    hermesTimeoutMs: hostOptions.hermes.timeoutMs,
     agentId
   }
 }
@@ -259,7 +365,7 @@ async function createCliLocalRuntimeExecutor({
   keyFile,
   args
 }) {
-  const hostContext = await resolveCliOpenClawHostContext({
+  const hostContext = await resolveCliHostContext({
     agentId,
     keyFile,
     args,
@@ -268,7 +374,7 @@ async function createCliLocalRuntimeExecutor({
   return createLocalRuntimeExecutor({
     agentId,
     mode: 'host',
-    hostRuntime: 'openclaw',
+    hostRuntime: hostContext.resolvedHostRuntime,
     conversationStore: createLiveConversationStore(),
     openclawStateDir: hostContext.openclawStateDir,
     openclawCommand: hostContext.openclawCommand,
@@ -276,10 +382,15 @@ async function createCliLocalRuntimeExecutor({
     openclawConfigPath: hostContext.openclawConfigPath,
     openclawAgent: hostContext.resolvedOpenClawAgent,
     openclawSessionPrefix: hostContext.openclawSessionPrefix,
-    openclawTimeoutMs: 180000,
+    openclawTimeoutMs: hostContext.openclawTimeoutMs,
     openclawGatewayUrl: hostContext.openclawGatewayUrl,
     openclawGatewayToken: hostContext.openclawGatewayToken,
-    openclawGatewayPassword: hostContext.openclawGatewayPassword
+    openclawGatewayPassword: hostContext.openclawGatewayPassword,
+    hermesCommand: hostContext.hermesCommand,
+    hermesHome: hostContext.hermesHome,
+    hermesProfile: hostContext.hermesProfile,
+    hermesApiBase: hostContext.hermesApiBase,
+    hermesTimeoutMs: hostContext.hermesTimeoutMs
   })
 }
 
@@ -421,7 +532,7 @@ function classifyGatewayFailure(error = '', hostRuntime = null) {
       ]
     }
   }
-  if (lower.includes('host runtime preflight failed') || lower.includes('openclaw') || lower.includes('pairing') || lower.includes('loopback')) {
+  if (lower.includes('host runtime preflight failed') || lower.includes('openclaw') || lower.includes('hermes') || lower.includes('pairing') || lower.includes('loopback')) {
     return {
       code: 'adapter-startup-failed',
       retryable: true,
@@ -467,15 +578,15 @@ function describeDetectedHostRuntime(detectedHostRuntime = null) {
 }
 
 function assertSupportedActivationHostRuntime(detectedHostRuntime = null) {
-  if (clean(detectedHostRuntime?.resolved) === 'openclaw') {
+  if (Boolean(detectedHostRuntime?.detected) && SUPPORTED_HOST_RUNTIMES.includes(clean(detectedHostRuntime?.resolved))) {
     return
   }
   const detected = describeDetectedHostRuntime(detectedHostRuntime)
   const reason = clean(detectedHostRuntime?.reason)
-  const suggested = clean(detectedHostRuntime?.suggested) || 'openclaw'
+  const suggested = clean(detectedHostRuntime?.suggested) || defaultSuggestedHostRuntime()
   const detail = reason ? ` Detection reason: ${reason}.` : ''
   throw new Error(
-    `AgentSquared activation currently supports only the OpenClaw host runtime. Detected host runtime: ${detected}.${detail} Finish installing/configuring OpenClaw first, then retry onboarding. Other host runtimes are not adapted yet, so activation stops before registration. Suggested host runtime: ${suggested}.`
+    `AgentSquared activation requires a supported host runtime (${defaultSuggestedHostRuntime()}). Detected host runtime: ${detected}.${detail} Finish installing/configuring a supported host runtime first, then retry onboarding. Suggested host runtime: ${suggested}.`
   )
 }
 
@@ -653,16 +764,11 @@ async function registerAgent(args) {
 async function commandOnboard(args) {
   const authorizationToken = clean(args['authorization-token'])
   assertNoExistingLocalActivation(authorizationToken)
+  const hostOptions = buildCliHostOptions(args)
   const detectedHostRuntime = await detectHostRuntimeEnvironment({
-    preferred: clean(args['host-runtime']) || 'auto',
-    openclaw: {
-      command: clean(args['openclaw-command']) || 'openclaw',
-      cwd: clean(args['openclaw-cwd']),
-      openclawAgent: clean(args['openclaw-agent']),
-      gatewayUrl: clean(args['openclaw-gateway-url']),
-      gatewayToken: clean(args['openclaw-gateway-token']),
-      gatewayPassword: clean(args['openclaw-gateway-password'])
-    }
+    preferred: hostOptions.preferredHostRuntime,
+    openclaw: hostOptions.openclaw,
+    hermes: hostOptions.hermes
   })
   assertSupportedActivationHostRuntime(detectedHostRuntime)
   if (!authorizationToken) {
@@ -815,7 +921,7 @@ async function commandOnboard(args) {
       'AgentSquared setup is complete.',
       `Agent: ${registration.result.fullName}`,
       `AgentSquared directory: ${agentsquaredDir}.`,
-      `Host runtime: ${detectedHostRuntime.resolved !== 'none' ? detectedHostRuntime.resolved : `not bound (${detectedHostRuntime.suggested || 'openclaw'} suggested)`}.`,
+      `Host runtime: ${detectedHostRuntime.resolved !== 'none' ? detectedHostRuntime.resolved : `not bound (${detectedHostRuntime.suggested || defaultSuggestedHostRuntime()} suggested)`}.`,
       gateway.started
         ? `Gateway was auto-started and is running at ${gateway.gatewayBase}.`
         : gateway.pending
@@ -976,14 +1082,76 @@ async function commandGatewayRestart(args, rawArgs) {
 }
 
 async function commandGatewayHealth(args) {
-  const context = resolveAgentContext(args)
-  const gatewayBase = resolveGatewayBase({
-    gatewayBase: args['gateway-base'],
-    keyFile: context.keyFile,
-    agentId: context.agentId,
-    gatewayStateFile: clean(args['gateway-state-file']) || context.gatewayStateFile
+  const hostOptions = buildCliHostOptions(args)
+  const detectedHostRuntime = await detectHostRuntimeEnvironment({
+    preferred: hostOptions.preferredHostRuntime,
+    openclaw: hostOptions.openclaw,
+    hermes: hostOptions.hermes
   })
-  printJson(await gatewayHealth(gatewayBase))
+
+  let context = null
+  let contextError = ''
+  try {
+    context = resolveAgentContext(args)
+  } catch (error) {
+    contextError = clean(error?.message)
+  }
+
+  let gatewayStatus = {
+    discovered: false,
+    gatewayStateFile: clean(args['gateway-state-file']),
+    gatewayBase: clean(args['gateway-base']),
+    running: false,
+    healthy: false,
+    pid: null,
+    revisionMatches: false,
+    stateRevision: '',
+    expectedRevision: currentRuntimeRevision(),
+    state: null,
+    health: null,
+    error: contextError
+  }
+
+  if (context) {
+    const existing = await inspectExistingGateway({
+      gatewayBase: args['gateway-base'],
+      keyFile: context.keyFile,
+      agentId: context.agentId,
+      gatewayStateFile: clean(args['gateway-state-file']) || context.gatewayStateFile
+    })
+    gatewayStatus = {
+      discovered: Boolean(existing.state || existing.gatewayBase || existing.running),
+      gatewayStateFile: existing.stateFile,
+      gatewayBase: existing.gatewayBase,
+      running: existing.running,
+      healthy: existing.healthy,
+      pid: existing.pid,
+      revisionMatches: existing.revisionMatches,
+      stateRevision: existing.stateRevision,
+      expectedRevision: existing.expectedRevision,
+      state: existing.state,
+      health: existing.health,
+      error: ''
+    }
+  }
+
+  const hostCoordination = buildHostCoordinationSummary(detectedHostRuntime, gatewayStatus.health)
+  const ready = Boolean(gatewayStatus.healthy && hostCoordination.detectedReady && (hostCoordination.gatewayObservedReady || !gatewayStatus.running))
+  const guidance = buildGatewayHealthGuidance({
+    detectedHostRuntime,
+    hostCoordination,
+    gatewayStatus
+  })
+
+  printJson({
+    ready,
+    contextResolved: Boolean(context),
+    agentId: clean(context?.agentId),
+    keyFile: clean(context?.keyFile),
+    hostRuntime: hostCoordination,
+    agentsquaredGateway: gatewayStatus,
+    guidance
+  })
 }
 
 async function commandFriendList(args) {
@@ -1336,15 +1504,11 @@ async function commandLocalInspect() {
 }
 
 async function commandHostDetect(args) {
+  const hostOptions = buildCliHostOptions(args)
   printJson(await detectHostRuntimeEnvironment({
-    preferred: clean(args['host-runtime']) || 'auto',
-    openclaw: {
-      command: clean(args['openclaw-command']) || 'openclaw',
-      cwd: clean(args['openclaw-cwd']),
-      gatewayUrl: clean(args['openclaw-gateway-url']),
-      gatewayToken: clean(args['openclaw-gateway-token']),
-      gatewayPassword: clean(args['openclaw-gateway-password'])
-    }
+    preferred: hostOptions.preferredHostRuntime,
+    openclaw: hostOptions.openclaw,
+    hermes: hostOptions.hermes
   }))
 }
 
@@ -1354,7 +1518,8 @@ function helpText() {
     '',
     'Stable runtime commands for AgentSquared local setup, host detection, gateway control, friend messaging, and inbox inspection.',
     'Installing or updating @agentsquared/cli does not imply re-onboarding. Use `a2-cli local inspect` first.',
-    'OpenClaw is used as the local host runtime. Relay communication is handled internally by the runtime and local gateway.',
+    `Supported host runtimes: ${SUPPORTED_HOST_RUNTIMES.join(', ')}.`,
+    'Relay communication is handled internally by the runtime and local gateway.',
     '',
     'Public commands:',
     '  a2-cli host detect [host options]',
@@ -1365,7 +1530,12 @@ function helpText() {
     '  a2-cli gateway restart --agent-id <id> --key-file <file> [gateway options]',
     '  a2-cli friend list --agent-id <id> --key-file <file>',
     '  a2-cli friend msg --target-agent <id> --text <text> --agent-id <id> --key-file <file> [--skill-name <name>] [--skill-file /path/to/skill.md]',
-    '  a2-cli inbox show --agent-id <id> --key-file <file>'
+    '  a2-cli inbox show --agent-id <id> --key-file <file>',
+    '',
+    'Host options (runtime-specific, optional):',
+    '  --host-runtime <auto|openclaw|hermes>',
+    '  OpenClaw: --openclaw-agent --openclaw-command --openclaw-cwd --openclaw-gateway-url --openclaw-gateway-token --openclaw-gateway-password',
+    '  Hermes: --hermes-command --hermes-home --hermes-profile --hermes-api-base'
   ].join('\n')
 }
 

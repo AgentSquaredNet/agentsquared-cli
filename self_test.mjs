@@ -27,6 +27,7 @@ import { detectHostRuntimeEnvironment, parseOpenClawTaskResult } from './adapter
 import { buildOpenClawSafetyPrompt, buildOpenClawTaskPrompt } from './adapters/openclaw/adapter.mjs'
 import { detectOpenClawHostEnvironment, resolveOpenClawAgentSelection } from './adapters/openclaw/detect.mjs'
 import { withOpenClawGatewayClient } from './adapters/openclaw/ws_client.mjs'
+import { readHermesEnv } from './adapters/hermes/env.mjs'
 import { runA2Cli } from './a2_cli.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -1317,6 +1318,137 @@ process.exit(2)
     })
     assert.equal(unsupportedHostDetection.resolved, 'none')
     assert.equal(unsupportedHostDetection.reason, 'unsupported-host-runtime:claude-code')
+
+    const hermesHome = path.join(tempDir, 'hermes-home')
+    fs.mkdirSync(hermesHome, { recursive: true })
+    const fakeHermes = path.join(tempDir, 'fake-hermes.sh')
+    fs.writeFileSync(fakeHermes, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    let hermesResponseCalls = 0
+    const hermesApiServer = http.createServer(async (req, res) => {
+      if (req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ status: 'ok' }))
+        return
+      }
+      if (req.url === '/v1/models') {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({
+          object: 'list',
+          data: [{ id: 'hermes-test', object: 'model' }]
+        }))
+        return
+      }
+      if (req.url === '/v1/responses' && req.method === 'POST') {
+        hermesResponseCalls += 1
+        const chunks = []
+        for await (const chunk of req) {
+          chunks.push(Buffer.from(chunk))
+        }
+        const payload = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+        const responseText = hermesResponseCalls === 1
+          ? JSON.stringify({
+              action: 'allow',
+              reason: 'safe'
+            })
+          : JSON.stringify({
+              selectedSkill: 'workflow_alpha',
+              peerResponse: 'Hermes handled the request.',
+              ownerReport: 'Hermes completed the inbound request.',
+              turnIndex: 1,
+              decision: 'done',
+              stopReason: 'completed',
+              finalize: true
+            })
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({
+          id: payload.id || `resp_${hermesResponseCalls}`,
+          object: 'response',
+          output: [{
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: responseText }]
+          }]
+        }))
+        return
+      }
+      res.writeHead(404, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'not found' } }))
+    })
+    await new Promise((resolve) => hermesApiServer.listen(0, '127.0.0.1', resolve))
+    const hermesApiPort = hermesApiServer.address().port
+    fs.writeFileSync(path.join(hermesHome, '.env'), `API_SERVER_ENABLED=true\nAPI_SERVER_KEY=test-hermes-key\nAPI_SERVER_PORT=${hermesApiPort}\n`, { mode: 0o600 })
+
+    const detectedHermes = await detectHostRuntimeEnvironment({
+      preferred: 'hermes',
+      hermes: {
+        command: fakeHermes,
+        hermesHome,
+        apiBase: `http://127.0.0.1:${hermesApiPort}`
+      }
+    })
+    assert.equal(detectedHermes.resolved, 'hermes')
+    assert.equal(detectedHermes.detected, true)
+    assert.equal(detectedHermes.apiServerHealthy, true)
+    assert.equal(detectedHermes.gatewayServiceInstalled, false)
+
+    const hermesExecutor = createLocalRuntimeExecutor({
+      agentId: 'agent-a@owner-a',
+      mode: 'host',
+      hostRuntime: 'hermes',
+      conversationStore: createLiveConversationStore(),
+      hermesCommand: fakeHermes,
+      hermesHome,
+      hermesApiBase: `http://127.0.0.1:${hermesApiPort}`,
+      hermesTimeoutMs: 10000
+    })
+    const hermesPreflight = await hermesExecutor.preflight()
+    assert.equal(hermesPreflight.ok, true)
+    const hermesExecution = await hermesExecutor({
+      item: {
+        inboundId: 'router-hermes-1',
+        remoteAgentId: 'agent-b@owner-b',
+        peerSessionId: 'peer-hermes',
+        request: {
+          method: 'message/send',
+          params: {
+            metadata: {
+              conversationKey: 'conv-hermes-1'
+            },
+            message: {
+              parts: [{ kind: 'text', text: 'Can you help me compare two approaches?' }]
+            }
+          }
+        }
+      },
+      selectedSkill: 'workflow_alpha',
+      mailboxKey: 'agent:agent-b@owner-b'
+    })
+    assert.equal(hermesExecution.peerResponse.message.parts[0].text, 'Hermes handled the request.')
+    assert.equal(hermesExecution.peerResponse.metadata.runtimeAdapter, 'hermes')
+    assert.equal(hermesExecution.peerResponse.metadata.stopReason, 'completed')
+    assert.equal(hermesExecution.ownerReport.runtimeAdapter, 'hermes')
+    assert.match(hermesExecution.ownerReport.message, /Overall summary/)
+    assert.equal(hermesResponseCalls, 2)
+
+    const hermesNoServiceHome = path.join(tempDir, 'hermes-no-service-home')
+    fs.mkdirSync(hermesNoServiceHome, { recursive: true })
+    const hermesNoServiceExecutor = createLocalRuntimeExecutor({
+      agentId: 'agent-a@owner-a',
+      mode: 'host',
+      hostRuntime: 'hermes',
+      hermesCommand: fakeHermes,
+      hermesHome: hermesNoServiceHome
+    })
+    const hermesNoServicePreflight = await hermesNoServiceExecutor.preflight()
+    assert.equal(hermesNoServicePreflight.ok, false)
+    assert.match(hermesNoServicePreflight.error, /start Hermes gateway manually/i)
+    const hermesNoServiceEnv = readHermesEnv(hermesNoServiceHome)
+    assert.equal(hermesNoServiceEnv.API_SERVER_ENABLED, 'true')
+    assert.ok(clean(hermesNoServiceEnv.API_SERVER_KEY))
+    assert.equal(clean(hermesNoServiceEnv.API_SERVER_HOST), '')
+    assert.equal(clean(hermesNoServiceEnv.API_SERVER_PORT), '')
+
+    await new Promise((resolve, reject) => hermesApiServer.close((error) => error ? reject(error) : resolve()))
 
     const openclawExecutor = createLocalRuntimeExecutor({
       agentId: 'agent-a@owner-a',
