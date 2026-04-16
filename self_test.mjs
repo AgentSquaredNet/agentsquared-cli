@@ -1734,6 +1734,11 @@ process.exit(2)
         searchRoots: [path.join(cliHome, '.openclaw', 'workspace', 'AgentSquared')]
       })
     })
+    assert.doesNotThrow(() => {
+      assertNoExistingLocalActivation('opaque-or-malformed-token', {
+        searchRoots: [path.join(cliHome, '.openclaw', 'workspace', 'AgentSquared')]
+      })
+    })
 
     const artifactOnlyHome = path.join(tempDir, 'cli-artifact-home')
     const artifactOnlyDir = path.join(artifactOnlyHome, '.openclaw', 'workspace', 'AgentSquared', 'orphan_agent', 'identity')

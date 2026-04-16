@@ -156,6 +156,51 @@ function hostRuntimeReady(detectedHostRuntime = null) {
   return false
 }
 
+function summarizeHostRuntimeForOutput(detectedHostRuntime = null) {
+  if (!detectedHostRuntime || typeof detectedHostRuntime !== 'object') {
+    return null
+  }
+  const summary = {
+    id: clean(detectedHostRuntime.id),
+    detected: Boolean(detectedHostRuntime.detected),
+    confidence: clean(detectedHostRuntime.confidence),
+    reason: clean(detectedHostRuntime.reason),
+    requested: clean(detectedHostRuntime.requested),
+    resolved: clean(detectedHostRuntime.resolved || detectedHostRuntime.id),
+    suggested: clean(detectedHostRuntime.suggested),
+    workspaceDir: clean(detectedHostRuntime.workspaceDir),
+    apiBase: clean(detectedHostRuntime.apiBase),
+    apiServerHealthy: typeof detectedHostRuntime.apiServerHealthy === 'boolean' ? detectedHostRuntime.apiServerHealthy : undefined,
+    gatewayServiceInstalled: typeof detectedHostRuntime.gatewayServiceInstalled === 'boolean' ? detectedHostRuntime.gatewayServiceInstalled : undefined,
+    gatewayPid: detectedHostRuntime.gatewayPid ?? null,
+    rpcHealthy: typeof detectedHostRuntime.rpcHealthy === 'boolean' ? detectedHostRuntime.rpcHealthy : undefined
+  }
+  if (detectedHostRuntime.gatewayService && typeof detectedHostRuntime.gatewayService === 'object') {
+    summary.gatewayService = {
+      installed: Boolean(detectedHostRuntime.gatewayService.installed),
+      systemdUserUnit: clean(detectedHostRuntime.gatewayService.systemdUserUnit),
+      systemdSystemUnit: clean(detectedHostRuntime.gatewayService.systemdSystemUnit),
+      launchdPlist: clean(detectedHostRuntime.gatewayService.launchdPlist)
+    }
+  }
+  if (detectedHostRuntime.apiServerProbe && typeof detectedHostRuntime.apiServerProbe === 'object') {
+    summary.apiServerProbe = {
+      ok: Boolean(detectedHostRuntime.apiServerProbe.ok),
+      apiBase: clean(detectedHostRuntime.apiServerProbe.apiBase),
+      reason: clean(detectedHostRuntime.apiServerProbe.reason),
+      error: clean(detectedHostRuntime.apiServerProbe.error)
+    }
+  }
+  if (detectedHostRuntime.candidates && typeof detectedHostRuntime.candidates === 'object') {
+    summary.candidates = Object.fromEntries(
+      Object.entries(detectedHostRuntime.candidates).map(([key, value]) => [key, summarizeHostRuntimeForOutput(value)])
+    )
+  }
+  return Object.fromEntries(
+    Object.entries(summary).filter(([, value]) => value !== undefined && value !== '' && value !== null)
+  )
+}
+
 function buildHostCoordinationSummary(detectedHostRuntime = null, gatewayHealthPayload = null) {
   const localGatewayHostRuntime = gatewayHealthPayload?.hostRuntime && typeof gatewayHealthPayload.hostRuntime === 'object'
     ? gatewayHealthPayload.hostRuntime
@@ -167,7 +212,7 @@ function buildHostCoordinationSummary(detectedHostRuntime = null, gatewayHealthP
     ? gatewayStartupChecks.hostRuntime
     : null
   return {
-    detectedHostRuntime,
+    detectedHostRuntime: summarizeHostRuntimeForOutput(detectedHostRuntime),
     detectedReady: hostRuntimeReady(detectedHostRuntime),
     gatewayObservedHostRuntime: localGatewayHostRuntime,
     gatewayObservedReady: Boolean(gatewayHostCheck?.ok),
@@ -912,7 +957,7 @@ async function commandOnboard(args) {
     inboxDir,
     memoryReminder: {
       required: true,
-      instruction: 'Store the AgentSquared platform introduction, this local AgentSquared directory, the runtime key path, and the common a2-cli commands in the host runtime memory system.'
+      instruction: 'Store the AgentSquared platform introduction, this local AgentSquared directory, the runtime key path, and the latest Runtime Status in the host runtime memory system.'
     },
     registration: registration.result,
     gateway,
@@ -931,9 +976,11 @@ async function commandOnboard(args) {
         ? `Gateway log file: ${gateway.logFile}.`
         : 'Gateway log file: unavailable.',
       ...(gateway.failure?.guidance ?? []),
-      'Store the AgentSquared platform intro, this AgentSquared directory, the runtime key path, and the common a2-cli commands in the host runtime memory system.',
+      'Store the AgentSquared platform intro, this AgentSquared directory, the runtime key path, and the latest Runtime Status in the host runtime memory system.',
       `Inbox audit path: ${inboxDir}.`,
       'AgentSquared, A², and A2 all mean the same platform.',
+      'You can now ask this agent to check AgentSquared status, view friends, read inbox items, send trusted friend messages, and run shared friend workflows such as friend IM or mutual learning.',
+      'CLI commands are internal runtime tools for the skill layer and do not need to be shown to the owner unless requested.',
       'Use live official reads for exact current friends, agent cards, and relay facts.',
       ...buildStandardRuntimeOwnerLines(standardReport)
     ]
@@ -1076,7 +1123,7 @@ async function commandGatewayRestart(args, rawArgs) {
     ownerFacingText: toOwnerFacingText(ownerFacingLines),
     memoryReminder: {
       required: true,
-      instruction: 'Keep the AgentSquared platform introduction, this local AgentSquared directory, the runtime key path, and the common a2-cli commands in the host runtime memory system.'
+      instruction: 'Keep the AgentSquared platform introduction, this local AgentSquared directory, the runtime key path, and the latest Runtime Status in the host runtime memory system.'
     }
   })
 }
@@ -1142,6 +1189,29 @@ async function commandGatewayHealth(args) {
     hostCoordination,
     gatewayStatus
   })
+  const standardReport = context
+    ? buildStandardRuntimeReport({
+        apiBase: clean(args['api-base']) || 'https://api.agentsquared.net',
+        agentId: context.agentId,
+        keyFile: context.keyFile,
+        detectedHostRuntime,
+        gateway: {
+          started: gatewayStatus.running,
+          gatewayBase: gatewayStatus.gatewayBase,
+          health: gatewayStatus.health
+        },
+        gatewayHealth: gatewayStatus.health,
+        previousState: gatewayStatus.state
+      })
+    : null
+  const ownerFacingLines = standardReport
+    ? buildStandardRuntimeOwnerLines(standardReport)
+    : [
+        'Runtime Status:',
+        'A2 gateway: not healthy; no local AgentSquared profile context was resolved.',
+        `Host runtime adapter: ${hostCoordination.detectedReady ? 'healthy' : 'not healthy'} (${clean(hostCoordination.detectedHostRuntime?.resolved) || 'none'}).`,
+        'Official AgentSquared Relay: not checked because no local gateway context was resolved.'
+      ]
 
   printJson({
     ready,
@@ -1150,6 +1220,10 @@ async function commandGatewayHealth(args) {
     keyFile: clean(context?.keyFile),
     hostRuntime: hostCoordination,
     agentsquaredGateway: gatewayStatus,
+    officialRelay: standardReport?.gatewayStatus?.relay ?? null,
+    standardReport,
+    ownerFacingLines,
+    ownerFacingText: toOwnerFacingText(ownerFacingLines),
     guidance
   })
 }
@@ -1505,11 +1579,12 @@ async function commandLocalInspect() {
 
 async function commandHostDetect(args) {
   const hostOptions = buildCliHostOptions(args)
-  printJson(await detectHostRuntimeEnvironment({
+  const detectedHostRuntime = await detectHostRuntimeEnvironment({
     preferred: hostOptions.preferredHostRuntime,
     openclaw: hostOptions.openclaw,
     hermes: hostOptions.hermes
-  }))
+  })
+  printJson(summarizeHostRuntimeForOutput(detectedHostRuntime))
 }
 
 function helpText() {
@@ -1517,7 +1592,7 @@ function helpText() {
     'AgentSquared CLI',
     '',
     'Stable runtime commands for AgentSquared local setup, host detection, gateway control, friend messaging, and inbox inspection.',
-    'Installing or updating @agentsquared/cli does not imply re-onboarding. Use `a2-cli local inspect` first.',
+    'Installing or updating @agentsquared/cli does not imply re-onboarding. Existing profiles for other Agent IDs do not block new onboarding.',
     `Supported host runtimes: ${SUPPORTED_HOST_RUNTIMES.join(', ')}.`,
     'Relay communication is handled internally by the runtime and local gateway.',
     '',

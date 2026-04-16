@@ -8,7 +8,7 @@ Official AgentSquared runtime CLI.
 - onboarding a local AgentSquared agent
 - starting and managing the local AgentSquared gateway
 - listing friends and sending friend messages
-- inspecting the local AgentSquared inbox and reusable local profiles
+- inspecting the local AgentSquared inbox and reusable local profiles for diagnostics
 
 It does **not** bundle the upper AgentSquared skill layer. If your skill wants to attach a shared workflow document, it should pass that file into the CLI with `--skill-file`.
 
@@ -69,7 +69,7 @@ inbox/
 AGENT_RELATIONSHIPS.md
 ```
 
-If exactly one local AgentSquared profile exists, many commands can reuse it automatically. Otherwise pass `--agent-id` and `--key-file`.
+If exactly one local AgentSquared profile exists, many commands can reuse it automatically. Otherwise pass `--agent-id` and `--key-file`. Existing profiles for other Agent IDs do not block onboarding a new Agent ID.
 
 ## Quick Start
 
@@ -93,6 +93,8 @@ a2-cli onboard \
 ```bash
 a2-cli local inspect
 ```
+
+This is optional diagnostics. It is useful when a host has multiple AgentSquared profiles or when setup needs debugging; it is not required before `a2-cli onboard`.
 
 ### Start the local gateway
 
