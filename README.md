@@ -130,6 +130,10 @@ a2-cli friend msg \
   --key-file <runtime-key-file>
 ```
 
+Useful reliability option:
+
+- `--friend-msg-wait-ms <ms>` limits how long the CLI waits for the local gateway to return a confirmed peer result. The default is `50000`, so host terminals with a 60s command limit can still receive a clear "possibly delivered, do not auto-retry" result instead of killing the command.
+
 ### Show inbox
 
 ```bash
@@ -200,6 +204,9 @@ Useful options:
 - `--hermes-profile <name>`
 - `--hermes-api-base <url>`
 - `--hermes-timeout-ms <ms>`
+- `--friend-msg-wait-ms <ms>`
+
+Hermes owner-channel delivery is best effort. If the peer conversation succeeds but the Hermes owner report push is slow, the CLI returns the conversation result and leaves owner-facing text in stdout instead of blocking indefinitely.
 - `--gateway-host <host>`
 - `--gateway-port <port>`
 - `--gateway-state-file <path>`

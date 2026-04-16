@@ -13,6 +13,7 @@ import { WebSocketServer } from 'ws'
 import { mcpSignTarget, onlineSignTarget, transportRefreshHeaders } from './lib/transport/relay_http.mjs'
 import { DEFAULT_LISTEN_ADDRS, buildRelayListenAddrs, createNode, dialProtocol, readJsonMessage, readSingleLine, requireListeningTransport, writeLine } from './lib/transport/libp2p.mjs'
 import { attachInboundRouter, buildJsonRpcEnvelope, createConnectTicketWithRecovery, exchangeOverTransport, openDirectPeerSession } from './lib/transport/peer_session.mjs'
+import { requestJson } from './lib/transport/http_json.mjs'
 import { signText } from './lib/runtime/keys.mjs'
 import { createInboxStore } from './lib/gateway/inbox.mjs'
 import { createGatewayRuntimeState } from './lib/gateway/runtime_state.mjs'
@@ -134,6 +135,29 @@ async function main() {
     assert.doesNotMatch(help, /relay agent-card get/)
     assert.doesNotMatch(help, /learning start/)
     assert.doesNotMatch(help, /message send/)
+  }
+
+  {
+    const slowServer = http.createServer((_req, res) => {
+      setTimeout(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: true }))
+      }, 500)
+    })
+    await new Promise((resolve) => slowServer.listen(0, '127.0.0.1', resolve))
+    const port = slowServer.address().port
+    const startedAt = Date.now()
+    await assert.rejects(
+      () => requestJson(`http://127.0.0.1:${port}/slow`, {
+        method: 'POST',
+        payload: { hello: 'world' },
+        timeoutMs: 50,
+        fallbackOnNetworkError: false
+      }),
+      (error) => error?.code === 'A2_HTTP_TIMEOUT'
+    )
+    assert.ok(Date.now() - startedAt < 450)
+    await new Promise((resolve) => slowServer.close(resolve))
   }
 
   const protocol = '/agentsquared/test/1.0'

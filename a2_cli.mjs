@@ -51,6 +51,11 @@ function clean(value) {
   return `${value ?? ''}`.trim()
 }
 
+function parsePositiveInteger(value, fallback = 0) {
+  const parsed = Number.parseInt(`${value ?? ''}`, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
 function excerpt(text, maxLength = 180) {
   const compact = clean(text).replace(/\s+/g, ' ').trim()
   if (!compact) {
@@ -697,6 +702,16 @@ function classifyOutboundFailure(error = '', targetAgentId = '') {
       nextStep: 'Do not automatically resend the same turn. Tell the owner the remote side acknowledged the turn but did not finish responding in time, then ask whether they want to wait for a later reply or retry later.'
     }
   }
+  if (error?.code === 'A2_HTTP_TIMEOUT' || lower.includes('http request timed out after')) {
+    return {
+      code: 'local-gateway-response-timeout',
+      deliveryStatus: 'unknown',
+      failureStage: 'local-gateway / response-timeout',
+      confirmationLevel: 'the remote agent may already have received and processed the message',
+      reason: `${clean(targetAgentId) || 'The target agent'} did not return a confirmed AgentSquared result before the local command timeout. The message may already have been delivered.`,
+      nextStep: 'Do not automatically resend the same message. Tell the owner it may have been delivered, then ask whether they want to wait, check for a later reply, or explicitly retry.'
+    }
+  }
   if (lower.includes('delivery status is unknown after the request was dispatched')) {
     return {
       code: 'delivery-status-unknown',
@@ -1262,6 +1277,7 @@ async function commandFriendMessage(args) {
     reason: explicitSkillName ? 'explicit-skill-arg' : sharedSkill?.name ? 'shared-skill-file' : 'no-skill-hint'
   }
   const conversationPolicy = resolveConversationPolicy(skillHint, sharedSkill)
+  const friendMsgWaitMs = Math.max(1000, parsePositiveInteger(args['friend-msg-wait-ms'] ?? process.env.A2_FRIEND_MSG_WAIT_MS, 50000))
   const conversationKey = randomRequestId('conversation')
   const sentAt = new Date().toISOString()
   const outboundText = buildSkillOutboundText({
@@ -1286,34 +1302,41 @@ async function commandFriendMessage(args) {
   let continuationError = ''
   try {
     while (true) {
-      result = await gatewayConnect(gatewayBase, {
-        targetAgentId,
-        skillHint,
-        method: 'message/send',
-        message: {
-          kind: 'message',
-          role: 'user',
-          parts: [{ kind: 'text', text: currentOutboundText }]
+      result = await gatewayConnect(
+        gatewayBase,
+        {
+          targetAgentId,
+          skillHint,
+          method: 'message/send',
+          message: {
+            kind: 'message',
+            role: 'user',
+            parts: [{ kind: 'text', text: currentOutboundText }]
+          },
+          metadata: {
+            ...(sharedSkill ? { sharedSkill } : {}),
+            originalOwnerText: turnIndex === 1 ? text : currentOutboundText,
+            conversationKey,
+            sentAt,
+            turnIndex: currentOutboundControl.turnIndex,
+            decision: currentOutboundControl.decision,
+            stopReason: currentOutboundControl.stopReason,
+            finalize: currentOutboundControl.finalize
+          },
+          activitySummary: turnIndex === 1
+            ? 'Preparing an AgentSquared peer conversation.'
+            : `Continuing AgentSquared peer conversation turn ${turnIndex}.`,
+          report: {
+            taskId: skillHint,
+            summary: `Delivered AgentSquared conversation turn ${turnIndex} to ${targetAgentId}.`,
+            publicSummary: ''
+          }
         },
-        metadata: {
-          ...(sharedSkill ? { sharedSkill } : {}),
-          originalOwnerText: turnIndex === 1 ? text : currentOutboundText,
-          conversationKey,
-          sentAt,
-          turnIndex: currentOutboundControl.turnIndex,
-          decision: currentOutboundControl.decision,
-          stopReason: currentOutboundControl.stopReason,
-          finalize: currentOutboundControl.finalize
-        },
-        activitySummary: turnIndex === 1
-          ? 'Preparing an AgentSquared peer conversation.'
-          : `Continuing AgentSquared peer conversation turn ${turnIndex}.`,
-        report: {
-          taskId: skillHint,
-          summary: `Delivered AgentSquared conversation turn ${turnIndex} to ${targetAgentId}.`,
-          publicSummary: ''
+        {
+          timeoutMs: friendMsgWaitMs,
+          fallbackOnNetworkError: false
         }
-      })
+      )
 
       const replyText = peerResponseText(result.response)
       const remoteControl = normalizeConversationControl(extractPeerResponseMetadata(result.response), {
@@ -1610,7 +1633,8 @@ function helpText() {
     'Host options (runtime-specific, optional):',
     '  --host-runtime <auto|openclaw|hermes>',
     '  OpenClaw: --openclaw-agent --openclaw-command --openclaw-cwd --openclaw-gateway-url --openclaw-gateway-token --openclaw-gateway-password',
-    '  Hermes: --hermes-command --hermes-home --hermes-profile --hermes-api-base'
+    '  Hermes: --hermes-command --hermes-home --hermes-profile --hermes-api-base',
+    '  Friend messaging: --friend-msg-wait-ms <ms> (default: 50000)'
   ].join('\n')
 }
 

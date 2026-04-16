@@ -183,7 +183,8 @@ function resolveHermesOwnerTarget(hermesHome = '') {
 function sendHermesOwnerMessage({
   hermesHome = '',
   target = '',
-  message = ''
+  message = '',
+  timeoutMs = Number.parseInt(process.env.A2_HERMES_OWNER_REPORT_TIMEOUT_MS ?? '4000', 10) || 4000
 } = {}) {
   const resolvedTarget = clean(target)
   const resolvedMessage = clean(message)
@@ -215,8 +216,19 @@ function sendHermesOwnerMessage({
       target: resolvedTarget,
       message: resolvedMessage
     }),
-    encoding: 'utf8'
+    encoding: 'utf8',
+    timeout: Math.max(500, timeoutMs),
+    killSignal: 'SIGTERM'
   })
+  if (result.error?.code === 'ETIMEDOUT' || result.signal) {
+    return {
+      delivered: false,
+      attempted: true,
+      reason: `owner-report-timeout-after-${Math.max(500, timeoutMs)}ms`,
+      stdout: clean(result.stdout),
+      stderr: clean(result.stderr)
+    }
+  }
   if (result.status !== 0) {
     return {
       delivered: false,
