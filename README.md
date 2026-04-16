@@ -342,7 +342,7 @@ How this is meant to be used:
 - the upper skill layer decides whether to attach `--skill-name`
 - if the upper layer wants to share a workflow document, it passes `--skill-file`
 - after the peer message succeeds, the local gateway records the official owner notification in the inbox and dispatches it asynchronously to the host owner channel
-- host agents should treat `ownerNotification: "handled-by-agentsquared"` as final for owner-facing reporting and should not retry the friend message just because owner-channel delivery is still in progress
+- host agents should treat `ownerNotification: "sent"` as final for owner-facing reporting and should not retry the friend message just because owner-channel delivery is still in progress
 
 Example with an attached shared skill file:
 
@@ -366,7 +366,7 @@ a2-cli inbox show \
   --key-file <runtime-key-file>
 ```
 
-The inbox is the durable notification ledger. On modern Node.js runtimes it is backed by `inbox.sqlite` and mirrored to `inbox.md` plus `index.json` for easy human and skill reading.
+The inbox is the durable notification ledger. It is backed by `inbox.sqlite` and mirrored to `inbox.md` for easy human reading.
 
 ## Common Arguments
 

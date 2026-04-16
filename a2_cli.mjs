@@ -292,10 +292,11 @@ async function pushCliOwnerReport({
         delivered: true,
         attempted: false,
         mode: 'agentsquared-gateway',
-        status: 'handled-by-agentsquared',
-        reason: 'owner-notification-handled-by-local-gateway',
+        status: 'sent',
+        reason: 'owner-notification-accepted-by-local-gateway',
         entryId: response?.entryId ?? '',
-        totalCount: response?.totalCount ?? 0
+        totalCount: response?.totalCount ?? 0,
+        ownerNotification: response?.ownerNotification ?? 'sent'
       }
     } catch (error) {
       return {
@@ -1501,7 +1502,7 @@ async function commandFriendMessage(args) {
     })
     const deliveredToOwner = Boolean(ownerDelivery.delivered)
     const ownerFacingText = deliveredToOwner
-      ? ''
+      ? 'Sent through AgentSquared.'
       : renderOwnerFacingReport(senderReport)
     const payload = {
       ok: false,
@@ -1516,14 +1517,14 @@ async function commandFriendMessage(args) {
         detail: clean(error?.message)
       },
       ownerDelivery,
-      ownerReplyPolicy: deliveredToOwner ? 'suppress' : 'report',
-      ownerFacingMode: deliveredToOwner ? 'suppress' : 'verbatim',
+      ownerNotification: deliveredToOwner ? 'sent' : 'fallback-required',
+      ownerFacingMode: deliveredToOwner ? 'brief' : 'verbatim',
       ownerFacingInstruction: deliveredToOwner
-        ? 'The full owner-facing AgentSquared report has already been delivered through the current owner channel. Do not add any extra owner-facing reply, summary, or recap.'
+        ? 'Tell the owner the AgentSquared update was sent successfully. Do not retry or wait for another delivery result.'
         : 'Use ownerFacingText verbatim as the owner-facing update for the human owner.',
       ownerFacingText,
       ownerFacingLines: toOwnerFacingLines(ownerFacingText),
-      stdoutNoticeCode: deliveredToOwner ? 'OWNER_REPORT_ALREADY_DELIVERED' : '',
+      stdoutNoticeCode: deliveredToOwner ? 'OWNER_NOTIFICATION_SENT' : '',
       stdoutLines: []
     }
     if (!deliveredToOwner) {
@@ -1604,19 +1605,19 @@ async function commandFriendMessage(args) {
   })
   const deliveredToOwner = Boolean(ownerDelivery.delivered)
   const ownerFacingText = deliveredToOwner
-    ? ''
+    ? 'Sent through AgentSquared.'
     : renderOwnerFacingReport(senderReport)
   const payload = {
     ok: true,
     ownerDelivery,
-    ownerReplyPolicy: deliveredToOwner ? 'suppress' : 'report',
-    ownerFacingMode: deliveredToOwner ? 'suppress' : 'verbatim',
+    ownerNotification: deliveredToOwner ? 'sent' : 'fallback-required',
+    ownerFacingMode: deliveredToOwner ? 'brief' : 'verbatim',
     ownerFacingInstruction: deliveredToOwner
-      ? 'The full owner-facing AgentSquared report has already been delivered through the current owner channel. Do not add any extra owner-facing reply, summary, or recap.'
+      ? 'Tell the owner the AgentSquared update was sent successfully. Do not retry or wait for another delivery result.'
       : 'Use ownerFacingText verbatim as the owner-facing update for the human owner.',
     ownerFacingText,
     ownerFacingLines: toOwnerFacingLines(ownerFacingText),
-    stdoutNoticeCode: deliveredToOwner ? 'OWNER_REPORT_ALREADY_DELIVERED' : '',
+    stdoutNoticeCode: deliveredToOwner ? 'OWNER_NOTIFICATION_SENT' : '',
     stdoutLines: []
   }
   if (!deliveredToOwner) {
