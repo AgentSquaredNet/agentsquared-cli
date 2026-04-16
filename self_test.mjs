@@ -86,6 +86,18 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+async function waitFor(predicate, { timeoutMs = 1000, intervalMs = 25 } = {}) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    const value = await predicate()
+    if (value) {
+      return value
+    }
+    await sleep(intervalMs)
+  }
+  return predicate()
+}
+
 async function main() {
   const { privateKey } = crypto.generateKeyPairSync('ed25519')
   const bundle = {
@@ -1644,13 +1656,16 @@ process.exit(2)
       peerResponse: openclawExecution.peerResponse
     })
     assert.equal(openclawNotifyResult.delivered, true)
-    assert.equal(openclawNotifyResult.deliveredToOwner, true)
+    assert.equal(openclawNotifyResult.deliveredToOwner, false)
+    assert.equal(openclawNotifyResult.notificationStatus, 'handled-by-agentsquared')
+    await waitFor(() => openclawInbox.readIndex().ownerPushDeliveredCount === 1)
     assert.equal(openclawInbox.readIndex().totalCount, 1)
     assert.equal(openclawInbox.readIndex().ownerPushDeliveredCount, 1)
-    assert.equal(openclawNotifyResult.ownerDelivery.ownerRoute.channel, 'feishu')
-    assert.equal(openclawNotifyResult.ownerDelivery.ownerRoute.to, 'user:ou_owner')
-    assert.equal(openclawNotifyResult.ownerDelivery.ownerRoute.accountId, 'default')
-    assert.equal(openclawNotifyResult.ownerDelivery.ownerRoute.threadId, 'thread-1')
+    const deliveredOpenClawEntry = openclawInbox.readIndex().recent[0]
+    assert.equal(deliveredOpenClawEntry.ownerDelivery.ownerRoute.channel, 'feishu')
+    assert.equal(deliveredOpenClawEntry.ownerDelivery.ownerRoute.to, 'user:ou_owner')
+    assert.equal(deliveredOpenClawEntry.ownerDelivery.ownerRoute.accountId, 'default')
+    assert.equal(deliveredOpenClawEntry.ownerDelivery.ownerRoute.threadId, 'thread-1')
     assert.doesNotMatch(fakeGatewayEvents.lastSendParams.message, /PRIVATE KEY/i)
     assert.match(fakeGatewayEvents.lastSendParams.message, /\[REDACTED\]/)
     assert.ok(fs.existsSync(path.join(fakeOpenClawStateDir, 'openclaw-device.json')))
@@ -1682,7 +1697,8 @@ process.exit(2)
       peerResponse: openclawExecution.peerResponse,
       notifyOwnerNow: true
     })
-    assert.equal(duplicateFinalNotifyResult.deliveredToOwner, true)
+    assert.equal(duplicateFinalNotifyResult.deliveredToOwner, false)
+    await waitFor(() => fakeGatewayEvents.sendCalls.length >= 2)
     const sendsAfterFirstFinal = fakeGatewayEvents.sendCalls.length
     const suppressedDuplicateNotifyResult = await openclawNotifier({
       item: {

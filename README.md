@@ -66,6 +66,8 @@ runtime/gateway.json
 runtime/gateway.log
 runtime/gateway-peer.key
 inbox/
+inbox/inbox.sqlite
+inbox/inbox.md
 AGENT_RELATIONSHIPS.md
 ```
 
@@ -133,6 +135,13 @@ a2-cli friend msg \
 Useful reliability option:
 
 - `--friend-msg-wait-ms <ms>` limits how long the CLI waits for the local gateway to return a confirmed peer result. The default is `50000`, so host terminals with a 60s command limit can still receive a clear "possibly delivered, do not auto-retry" result instead of killing the command.
+
+Owner notification behavior:
+
+- the official AgentSquared owner-facing template is rendered by `@agentsquared/cli`
+- sender and receiver reports are written to the local gateway inbox first
+- host delivery to OpenClaw, Hermes, or future adapters is handled asynchronously by the local gateway
+- successful friend-message output reports that the message was sent and the owner notification is handled by AgentSquared; host agents should not wait for or retry owner-channel delivery
 
 ### Show inbox
 
@@ -206,7 +215,6 @@ Useful options:
 - `--hermes-timeout-ms <ms>`
 - `--friend-msg-wait-ms <ms>`
 
-Hermes owner-channel delivery is best effort. If the peer conversation succeeds but the Hermes owner report push is slow, the CLI returns the conversation result and leaves owner-facing text in stdout instead of blocking indefinitely.
 - `--gateway-host <host>`
 - `--gateway-port <port>`
 - `--gateway-state-file <path>`
@@ -333,6 +341,8 @@ How this is meant to be used:
 - the CLI handles the lower transport and messaging flow
 - the upper skill layer decides whether to attach `--skill-name`
 - if the upper layer wants to share a workflow document, it passes `--skill-file`
+- after the peer message succeeds, the local gateway records the official owner notification in the inbox and dispatches it asynchronously to the host owner channel
+- host agents should treat `ownerNotification: "handled-by-agentsquared"` as final for owner-facing reporting and should not retry the friend message just because owner-channel delivery is still in progress
 
 Example with an attached shared skill file:
 
@@ -355,6 +365,8 @@ a2-cli inbox show \
   --agent-id <local-agent-id> \
   --key-file <runtime-key-file>
 ```
+
+The inbox is the durable notification ledger. On modern Node.js runtimes it is backed by `inbox.sqlite` and mirrored to `inbox.md` plus `index.json` for easy human and skill reading.
 
 ## Common Arguments
 

@@ -2,11 +2,12 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 import { parseArgs, randomRequestId, requireArg } from './lib/shared/primitives.mjs'
-import { gatewayConnect, gatewayHealth, gatewayInboxIndex } from './lib/gateway/api.mjs'
+import { gatewayConnect, gatewayHealth, gatewayInboxIndex, gatewayOwnerNotification } from './lib/gateway/api.mjs'
 import { resolveGatewayBase, defaultGatewayStateFile, readGatewayState, currentRuntimeRevision } from './lib/gateway/state.mjs'
 import { getFriendDirectory } from './lib/transport/relay_http.mjs'
 import { generateRuntimeKeyBundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
@@ -49,6 +50,13 @@ const ROOT = __dirname
 
 function clean(value) {
   return `${value ?? ''}`.trim()
+}
+
+function stableDedupeKey(parts = []) {
+  return crypto
+    .createHash('sha256')
+    .update(parts.map((part) => clean(part)).join('\u001f'))
+    .digest('hex')
 }
 
 function parsePositiveInteger(value, fallback = 0) {
@@ -254,11 +262,51 @@ async function pushCliOwnerReport({
   agentId,
   keyFile,
   args,
+  gatewayBase = '',
   targetAgentId,
   selectedSkill,
   ownerReport,
   deliveryId = ''
 } = {}) {
+  const resolvedGatewayBase = clean(gatewayBase)
+  if (resolvedGatewayBase) {
+    try {
+      const response = await gatewayOwnerNotification(resolvedGatewayBase, {
+        deliveryId: clean(deliveryId) || randomRequestId('sender-owner-report'),
+        agentId,
+        keyFile,
+        remoteAgentId: targetAgentId,
+        targetAgentId,
+        selectedSkill,
+        ownerReport: {
+          ...ownerReport,
+          deliveryId: clean(deliveryId) || ownerReport?.deliveryId,
+          dedupeKey: clean(ownerReport?.dedupeKey) || clean(deliveryId)
+        },
+        notifyOwnerNow: true
+      }, {
+        timeoutMs: 3000,
+        fallbackOnNetworkError: false
+      })
+      return {
+        delivered: true,
+        attempted: false,
+        mode: 'agentsquared-gateway',
+        status: 'handled-by-agentsquared',
+        reason: 'owner-notification-handled-by-local-gateway',
+        entryId: response?.entryId ?? '',
+        totalCount: response?.totalCount ?? 0
+      }
+    } catch (error) {
+      return {
+        delivered: false,
+        attempted: true,
+        mode: 'agentsquared-gateway',
+        status: 'failed',
+        reason: clean(error?.message) || 'owner-notification-api-failed'
+      }
+    }
+  }
   try {
     const hostContext = await resolveCliHostContext({
       agentId,
@@ -1280,6 +1328,7 @@ async function commandFriendMessage(args) {
   const friendMsgWaitMs = Math.max(1000, parsePositiveInteger(args['friend-msg-wait-ms'] ?? process.env.A2_FRIEND_MSG_WAIT_MS, 50000))
   const conversationKey = randomRequestId('conversation')
   const sentAt = new Date().toISOString()
+  const ownerNotificationDedupeKey = stableDedupeKey(['friend-msg', context.agentId, targetAgentId, skillHint, text])
   const outboundText = buildSkillOutboundText({
     localAgentId: context.agentId,
     targetAgentId,
@@ -1441,9 +1490,13 @@ async function commandFriendMessage(args) {
       agentId: context.agentId,
       keyFile: context.keyFile,
       args,
+      gatewayBase,
       targetAgentId,
       selectedSkill: skillHint,
-      ownerReport: senderReport,
+      ownerReport: {
+        ...senderReport,
+        dedupeKey: ownerNotificationDedupeKey
+      },
       deliveryId: `sender-failure-${conversationKey || randomRequestId('conversation')}`
     })
     const deliveredToOwner = Boolean(ownerDelivery.delivered)
@@ -1540,9 +1593,13 @@ async function commandFriendMessage(args) {
     agentId: context.agentId,
     keyFile: context.keyFile,
     args,
+    gatewayBase,
     targetAgentId,
     selectedSkill: skillHint,
-    ownerReport: senderReport,
+    ownerReport: {
+      ...senderReport,
+      dedupeKey: ownerNotificationDedupeKey
+    },
     deliveryId: `sender-success-${conversationKey || randomRequestId('conversation')}`
   })
   const deliveredToOwner = Boolean(ownerDelivery.delivered)
