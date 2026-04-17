@@ -1036,7 +1036,7 @@ process.exit(2)
     assert.equal(responded[0].result.metadata.selectedSkill, 'workflow_alpha')
     assert.equal(ownerReports.length, 1)
     assert.equal(ownerReports[0].ownerReport.summary, 'owner saw router1')
-    assert.equal(ownerReports[0].notifyOwnerNow, true)
+    assert.equal('notifyOwnerNow' in ownerReports[0], false)
 
     const continuedOwnerReports = []
     const continuingRouter = createAgentRouter({
@@ -1090,9 +1090,8 @@ process.exit(2)
         }
       }
     })
-    await continuingRouter.whenIdle()
     assert.equal(continuedOwnerReports.length, 1)
-    assert.equal(continuedOwnerReports[0].notifyOwnerNow, true)
+    assert.equal('notifyOwnerNow' in continuedOwnerReports[0], false)
     assert.equal(continuedOwnerReports[0].conversation.finalize, false)
     assert.equal(continuedOwnerReports[0].conversation.decision, 'continue')
 
@@ -1803,8 +1802,7 @@ process.exit(2)
         conversationKey: 'conv-final-dedupe',
         finalize: true
       },
-      peerResponse: openclawExecution.peerResponse,
-      notifyOwnerNow: true
+      peerResponse: openclawExecution.peerResponse
     })
     assert.equal(duplicateFinalNotifyResult.deliveredToOwner, false)
     await waitFor(() => fakeGatewayEvents.sendCalls.length >= 2)
@@ -1822,11 +1820,11 @@ process.exit(2)
         conversationKey: 'conv-final-dedupe',
         finalize: true
       },
-      peerResponse: openclawExecution.peerResponse,
-      notifyOwnerNow: true
+      peerResponse: openclawExecution.peerResponse
     })
     assert.equal(suppressedDuplicateNotifyResult.delivered, true)
     assert.equal(suppressedDuplicateNotifyResult.deliveredToOwner, false)
+    assert.equal(suppressedDuplicateNotifyResult.ownerDelivery.status, 'skipped_duplicate')
     assert.equal(suppressedDuplicateNotifyResult.ownerDelivery.reason, 'duplicate-final-report-suppressed')
     assert.equal(fakeGatewayEvents.sendCalls.length, sendsAfterFirstFinal)
 
@@ -1938,7 +1936,8 @@ process.exit(2)
         attempted: false,
         delivered: false,
         mode: 'inbox',
-        reason: 'audit-only'
+        status: 'stored',
+        reason: 'inbox-only'
       },
       peerResponse: {
         message: {
@@ -1975,7 +1974,8 @@ process.exit(2)
         attempted: false,
         delivered: false,
         mode: 'inbox',
-        reason: 'audit-only'
+        status: 'stored',
+        reason: 'inbox-only'
       },
       peerResponse: {
         message: {
@@ -2009,7 +2009,8 @@ process.exit(2)
         attempted: false,
         delivered: false,
         mode: 'inbox',
-        reason: 'audit-only'
+        status: 'stored',
+        reason: 'inbox-only'
       },
       peerResponse: {
         message: {

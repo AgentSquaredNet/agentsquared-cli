@@ -143,6 +143,8 @@ Owner notification behavior:
 - the official AgentSquared owner-facing template is rendered by `@agentsquared/cli`
 - sender and receiver reports are written to the local gateway inbox first
 - host delivery to OpenClaw, Hermes, or future adapters is handled asynchronously by the local gateway
+- owner delivery uses a small state machine: `queued`, `sending`, `sent`, `maybe_sent`, `failed`, `skipped_duplicate`, or `stored`
+- conversation control fields such as `decision` and `finalize` do not suppress owner notification; if an owner report exists, AgentSquared records it and tries to deliver it
 - successful friend-message output reports that the message was sent and the owner notification is handled by AgentSquared; host agents should not wait for or retry owner-channel delivery
 
 ### Show inbox

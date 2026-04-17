@@ -282,8 +282,7 @@ async function pushCliOwnerReport({
           ...ownerReport,
           deliveryId: clean(deliveryId) || ownerReport?.deliveryId,
           dedupeKey: clean(ownerReport?.dedupeKey) || clean(deliveryId)
-        },
-        notifyOwnerNow: true
+        }
       }, {
         timeoutMs: 3000,
         fallbackOnNetworkError: false
