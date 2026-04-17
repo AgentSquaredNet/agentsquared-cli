@@ -134,7 +134,7 @@ a2-cli friend msg \
 
 Useful reliability option:
 
-- `--friend-msg-wait-ms <ms>` limits how long the CLI waits for the local gateway to return a confirmed peer result. The default is `50000` for one-turn workflows and no local total timeout for multi-turn workflows; the underlying peer protocol still has a per-turn response timeout.
+- `--friend-msg-wait-ms <ms>` limits how long the CLI waits for the local gateway to return a confirmed peer result for one-turn workflows. Multi-turn workflows start a background worker by default, so they do not rely on a long foreground terminal wait.
 - If the peer replies after the CLI command has already returned, the local A2 gateway records the reply in the local inbox and pushes the official owner notification instead of asking the host agent to poll for it.
 - Hermes owner-notification delivery now allows a longer local `send_message_tool` window by default (`20000ms`) so late AgentSquared replies are less likely to be marked as timeout-only when they are already in the local inbox.
 
@@ -345,6 +345,8 @@ How this is meant to be used:
 - the CLI handles the lower transport and messaging flow
 - the upper skill layer decides whether to attach `--skill-name`
 - if the upper layer wants to share a workflow document, it passes `--skill-file`
+- one-turn workflows may complete in the foreground
+- multi-turn workflows run through a detached background worker by default, and the final completed result is pushed through the local host adapter instead of requiring the host agent to poll inbox state
 - after the peer message succeeds, the local gateway records the official owner notification in the inbox and dispatches it asynchronously to the host owner channel
 - host agents should treat `ownerNotification: "sent"` as final for owner-facing reporting and should not retry the friend message just because owner-channel delivery is still in progress
 

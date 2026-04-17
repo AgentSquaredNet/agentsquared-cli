@@ -88,6 +88,11 @@ function parsePositiveInteger(value, fallback = 0) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
+function isTrueFlag(value) {
+  const normalized = clean(value).toLowerCase()
+  return normalized === 'true' || normalized === '1' || normalized === 'yes'
+}
+
 function excerpt(text, maxLength = 180) {
   const compact = clean(text).replace(/\s+/g, ' ').trim()
   if (!compact) {
@@ -417,6 +422,35 @@ function loadSharedSkillFile(skillFile) {
     maxTurns: policy.maxTurns,
     document: clean(text).slice(0, 16000)
   }
+}
+
+function buildFriendMessageWorkerArgv(args = {}) {
+  const argv = ['friend', 'msg']
+  for (const [key, value] of Object.entries(args)) {
+    if (key === '_' || key === 'background-worker' || key === 'friend-msg-sync') {
+      continue
+    }
+    const normalizedValue = clean(value)
+    if (!normalizedValue) {
+      continue
+    }
+    argv.push(`--${key}`)
+    if (normalizedValue !== 'true') {
+      argv.push(normalizedValue)
+    }
+  }
+  argv.push('--background-worker', 'true')
+  return argv
+}
+
+function spawnFriendMessageWorker(args = {}) {
+  const worker = spawn(process.execPath, [path.join(ROOT, 'a2_cli.mjs'), ...buildFriendMessageWorkerArgv(args)], {
+    cwd: ROOT,
+    detached: true,
+    stdio: 'ignore'
+  })
+  worker.unref()
+  return worker
 }
 
 function extractPeerResponseMetadata(response = null) {
@@ -1340,13 +1374,6 @@ async function commandFriendList(args) {
 }
 
 async function commandFriendMessage(args) {
-  const gateway = await ensureGatewayForUse(args)
-  const context = {
-    agentId: gateway.agentId,
-    keyFile: gateway.keyFile,
-    gatewayStateFile: gateway.gatewayStateFile
-  }
-  const gatewayBase = gateway.gatewayBase
   const targetAgentId = requireArg(args['target-agent'], '--target-agent is required')
   const text = requireArg(args.text, '--text is required')
   const ownerLanguage = inferOwnerFacingLanguage(text)
@@ -1360,6 +1387,36 @@ async function commandFriendMessage(args) {
     reason: explicitSkillName ? 'explicit-skill-arg' : sharedSkill?.name ? 'shared-skill-file' : 'no-skill-hint'
   }
   const conversationPolicy = resolveConversationPolicy(skillHint, sharedSkill)
+  const runInBackground = conversationPolicy.maxTurns > 1
+    && !isTrueFlag(args['background-worker'])
+    && !isTrueFlag(args['friend-msg-sync'])
+
+  if (runInBackground) {
+    await ensureGatewayForUse(args)
+    spawnFriendMessageWorker(args)
+    printJson({
+      ok: true,
+      status: 'sent',
+      backgroundWorker: true,
+      conversationMode: 'async',
+      ownerNotification: 'sent',
+      ownerFacingMode: 'brief',
+      ownerFacingInstruction: 'Tell the owner only that the AgentSquared exchange was started. Do not check inbox, wait, retry, or add your own follow-up. AgentSquared will push the final conversation result through the host API when it is ready.',
+      ownerFacingText: 'Sent through AgentSquared.',
+      ownerFacingLines: ['Sent through AgentSquared.'],
+      stdoutNoticeCode: 'OWNER_NOTIFICATION_SENT',
+      stdoutLines: []
+    })
+    return
+  }
+
+  const gateway = await ensureGatewayForUse(args)
+  const context = {
+    agentId: gateway.agentId,
+    keyFile: gateway.keyFile,
+    gatewayStateFile: gateway.gatewayStateFile
+  }
+  const gatewayBase = gateway.gatewayBase
   const requestedFriendMsgWaitMs = parsePositiveInteger(args['friend-msg-wait-ms'] ?? process.env.A2_FRIEND_MSG_WAIT_MS, 0)
   const defaultFriendMsgWaitMs = conversationPolicy.maxTurns > 1 ? 0 : 50000
   const friendMsgWaitMs = requestedFriendMsgWaitMs || defaultFriendMsgWaitMs
@@ -1737,7 +1794,7 @@ function helpText() {
     '  --host-runtime <auto|openclaw|hermes>',
     '  OpenClaw: --openclaw-agent --openclaw-command --openclaw-cwd --openclaw-gateway-url --openclaw-gateway-token --openclaw-gateway-password',
     '  Hermes: --hermes-command --hermes-home --hermes-profile --hermes-api-base',
-    '  Friend messaging: --friend-msg-wait-ms <ms> (default: 50000 for one-turn workflows, no local total timeout for multi-turn workflows)'
+    '  Friend messaging: --friend-msg-wait-ms <ms> (default: 50000 for one-turn workflows; multi-turn workflows start a background worker by default)'
   ].join('\n')
 }
 
