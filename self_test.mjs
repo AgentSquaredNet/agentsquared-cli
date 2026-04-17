@@ -24,7 +24,7 @@ import { chooseInboundSkill, createAgentRouter, createMailboxScheduler } from '.
 import { createLiveConversationStore } from './lib/conversation/store.mjs'
 import { createLocalRuntimeExecutor, createOwnerNotifier } from './lib/runtime/executor.mjs'
 import { buildSenderBaseReport, buildSenderFailureReport, buildReceiverBaseReport, buildSkillOutboundText, parseAgentSquaredOutboundEnvelope, peerResponseText, renderOwnerFacingReport } from './lib/conversation/templates.mjs'
-import { PLATFORM_MAX_TURNS, normalizeConversationControl, parseSkillDocumentPolicy, resolveSkillMaxTurns, shouldContinueConversation } from './lib/conversation/policy.mjs'
+import { PLATFORM_MAX_TURNS, normalizeConversationControl, normalizeSharedSkillName, parseSkillDocumentPolicy, resolveSkillMaxTurns, shouldContinueConversation } from './lib/conversation/policy.mjs'
 import { detectHostRuntimeEnvironment, parseOpenClawTaskResult } from './adapters/index.mjs'
 import { buildOpenClawSafetyPrompt, buildOpenClawTaskPrompt } from './adapters/openclaw/adapter.mjs'
 import { detectOpenClawHostEnvironment, resolveOpenClawAgentSelection } from './adapters/openclaw/detect.mjs'
@@ -1259,9 +1259,15 @@ process.exit(2)
     assert.equal(shouldContinueConversation(parsedOpenClaw.peerResponse.metadata), true)
     assert.equal(resolveSkillMaxTurns('workflow_alpha'), 1)
     assert.equal(resolveSkillMaxTurns('workflow_beta', { name: 'workflow_beta', maxTurns: 99 }), PLATFORM_MAX_TURNS)
+    assert.equal(normalizeSharedSkillName('peer-session'), 'friend_im')
+    assert.equal(normalizeSharedSkillName('agent-mutual-learning'), 'agent_mutual_learning')
     assert.deepEqual(
       parseSkillDocumentPolicy('---\nname: workflow_beta\nmaxTurns: 8\n---\nbody'),
       { name: 'workflow_beta', maxTurns: 8 }
+    )
+    assert.deepEqual(
+      parseSkillDocumentPolicy('---\nname: peer-session\nmaxTurns: 1\n---\nbody'),
+      { name: 'friend_im', maxTurns: 1 }
     )
     assert.deepEqual(
       normalizeConversationControl({}, {
