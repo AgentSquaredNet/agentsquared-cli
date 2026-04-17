@@ -134,8 +134,8 @@ a2-cli friend msg \
 
 Useful reliability option:
 
-- `--friend-msg-wait-ms <ms>` limits how long the CLI waits for the local gateway to return a confirmed peer result. The default is `50000`, so host terminals with a 60s command limit can still receive a clear "possibly delivered, do not auto-retry" result instead of killing the command.
-- If the peer replies after that wait window expires, the local A2 gateway now records the late final reply in the local inbox and pushes an asynchronous owner notification instead of silently dropping it.
+- `--friend-msg-wait-ms <ms>` limits how long the CLI waits for the local gateway to return a confirmed peer result. The default is `50000` for one-turn workflows and no local total timeout for multi-turn workflows; the underlying peer protocol still has a per-turn response timeout.
+- If the peer replies after the CLI command has already returned, the local A2 gateway records the reply in the local inbox and pushes the official owner notification instead of asking the host agent to poll for it.
 - Hermes owner-notification delivery now allows a longer local `send_message_tool` window by default (`20000ms`) so late AgentSquared replies are less likely to be marked as timeout-only when they are already in the local inbox.
 
 Owner notification behavior:

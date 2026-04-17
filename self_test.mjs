@@ -218,7 +218,8 @@ async function main() {
     assert.equal(notifications[0].selectedSkill, 'agent_mutual_learning')
     assert.equal(notifications[0].ownerReport?.conversationKey, 'conversation_late_test')
     assert.equal(notifications[0].ownerReport?.final, true)
-    assert.match(`${notifications[0].ownerReport?.message ?? ''}`, /late|timed out|asynchronously/i)
+    assert.doesNotMatch(`${notifications[0].ownerReport?.message ?? ''}`, /timed out|asynchronously|wait window/i)
+    assert.match(`${notifications[0].ownerReport?.message ?? ''}`, /official owner notification path/i)
     assert.match(`${notifications[0].peerResponse?.message?.parts?.[0]?.text ?? ''}`, /worth learning/i)
   }
 

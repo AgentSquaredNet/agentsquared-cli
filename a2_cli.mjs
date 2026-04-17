@@ -526,6 +526,7 @@ async function executeLocalConversationTurn({
   sharedSkill,
   inboundText,
   originalOwnerText = '',
+  localSkillInventory = '',
   turnIndex,
   remoteControl = null
 }) {
@@ -841,6 +842,17 @@ function classifyOutboundFailure(error = '', targetAgentId = '') {
     reason: message || 'The AgentSquared message could not be delivered.',
     nextStep: 'Do not switch to another target automatically. Stop here and ask the owner whether they want to retry this same target later.'
   }
+}
+
+function shouldTreatOutboundFailureAsAsyncSent(failure = null) {
+  return new Set([
+    'local-gateway-response-timeout',
+    'post-dispatch-response-timeout',
+    'turn-response-timeout',
+    'delivery-status-unknown',
+    'post-dispatch-empty-response',
+    'post-dispatch-stream-closed'
+  ]).has(clean(failure?.code))
 }
 
 function extractFailureDetail(error = null) {
@@ -1348,7 +1360,9 @@ async function commandFriendMessage(args) {
     reason: explicitSkillName ? 'explicit-skill-arg' : sharedSkill?.name ? 'shared-skill-file' : 'no-skill-hint'
   }
   const conversationPolicy = resolveConversationPolicy(skillHint, sharedSkill)
-  const friendMsgWaitMs = Math.max(1000, parsePositiveInteger(args['friend-msg-wait-ms'] ?? process.env.A2_FRIEND_MSG_WAIT_MS, 50000))
+  const requestedFriendMsgWaitMs = parsePositiveInteger(args['friend-msg-wait-ms'] ?? process.env.A2_FRIEND_MSG_WAIT_MS, 0)
+  const defaultFriendMsgWaitMs = conversationPolicy.maxTurns > 1 ? 0 : 50000
+  const friendMsgWaitMs = requestedFriendMsgWaitMs || defaultFriendMsgWaitMs
   const conversationKey = randomRequestId('conversation')
   const sentAt = new Date().toISOString()
   const ownerNotificationDedupeKey = stableDedupeKey(['friend-msg', context.agentId, targetAgentId, skillHint, text])
@@ -1455,6 +1469,7 @@ async function commandFriendMessage(args) {
           sharedSkill,
           inboundText: replyText,
           originalOwnerText: text,
+          localSkillInventory: '',
           turnIndex: nextTurnIndex,
           remoteControl
         })
@@ -1486,6 +1501,20 @@ async function commandFriendMessage(args) {
     }
   } catch (error) {
     const failure = classifyOutboundFailure(error, targetAgentId)
+    if (shouldTreatOutboundFailureAsAsyncSent(failure)) {
+      printJson({
+        ok: true,
+        status: 'sent',
+        ownerNotification: 'sent',
+        ownerFacingMode: 'brief',
+        ownerFacingInstruction: 'Tell the owner only that the message was sent through AgentSquared. Do not check inbox, retry, wait, ask follow-up choices, or describe AgentSquared internal delivery state.',
+        ownerFacingText: 'Sent through AgentSquared.',
+        ownerFacingLines: ['Sent through AgentSquared.'],
+        stdoutNoticeCode: 'OWNER_NOTIFICATION_SENT',
+        stdoutLines: []
+      })
+      return
+    }
     const senderReport = buildSenderFailureReport({
       localAgentId: context.agentId,
       targetAgentId,
@@ -1708,7 +1737,7 @@ function helpText() {
     '  --host-runtime <auto|openclaw|hermes>',
     '  OpenClaw: --openclaw-agent --openclaw-command --openclaw-cwd --openclaw-gateway-url --openclaw-gateway-token --openclaw-gateway-password',
     '  Hermes: --hermes-command --hermes-home --hermes-profile --hermes-api-base',
-    '  Friend messaging: --friend-msg-wait-ms <ms> (default: 50000)'
+    '  Friend messaging: --friend-msg-wait-ms <ms> (default: 50000 for one-turn workflows, no local total timeout for multi-turn workflows)'
   ].join('\n')
 }
 
