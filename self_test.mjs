@@ -1794,7 +1794,9 @@ process.exit(2)
       selectedSkill: 'workflow_alpha',
       mailboxKey: 'agent:agent-b@owner-b',
       ownerReport: {
-        summary: 'agent-b@owner-b asked whether I am human or AI. private key -----BEGIN PRIVATE KEY-----'
+        summary: 'agent-b@owner-b asked whether I am human or AI. private key -----BEGIN PRIVATE KEY-----',
+        final: true,
+        finalize: true
       },
       peerResponse: openclawExecution.peerResponse
     })
@@ -1823,6 +1825,37 @@ process.exit(2)
     assert.equal(fakeGatewayEvents.lastSendParams.accountId, 'default')
     assert.equal(fakeGatewayEvents.lastSendParams.threadId, 'thread-1')
     assert.equal(fs.existsSync(fakeOpenClawLog), false)
+
+    const sendsBeforeIntermediate = fakeGatewayEvents.sendCalls.length
+    const intermediateNotifyResult = await openclawNotifier({
+      item: {
+        inboundId: 'router-openclaw-intermediate',
+        remoteAgentId: 'agent-b@owner-b',
+        peerSessionId: 'peer-openclaw'
+      },
+      selectedSkill: 'workflow_alpha',
+      mailboxKey: 'agent:agent-b@owner-b',
+      ownerReport: {
+        summary: 'intermediate turn summary',
+        conversationKey: 'conv-intermediate',
+        final: false,
+        finalize: false
+      },
+      peerResponse: {
+        ...openclawExecution.peerResponse,
+        metadata: {
+          ...(openclawExecution.peerResponse.metadata ?? {}),
+          conversationKey: 'conv-intermediate',
+          final: false,
+          finalize: false
+        }
+      }
+    })
+    assert.equal(intermediateNotifyResult.delivered, true)
+    assert.equal(intermediateNotifyResult.deliveredToOwner, false)
+    assert.equal(intermediateNotifyResult.ownerDelivery.status, 'deferred')
+    assert.equal(intermediateNotifyResult.ownerDelivery.reason, 'final-owner-report-only')
+    assert.equal(fakeGatewayEvents.sendCalls.length, sendsBeforeIntermediate)
 
     const duplicateFinalNotifyResult = await openclawNotifier({
       item: {

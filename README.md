@@ -134,7 +134,7 @@ a2-cli friend msg \
 
 Useful reliability option:
 
-- `--friend-msg-wait-ms <ms>` limits how long the CLI waits for the local gateway to return a confirmed peer result for one-turn workflows. Multi-turn workflows stay in the foreground by default so the CLI can finish the bounded exchange before returning to the host agent. In that mode the local HTTP wait is left open, and the transport still enforces per-turn receipt/response timeouts internally. Use `--background-worker true` only when you explicitly want detached execution.
+- `--friend-msg-wait-ms <ms>` limits how long the CLI waits for the local gateway to return a confirmed peer result for one-turn workflows. Multi-turn workflows normally stay in the foreground so the CLI can finish the bounded exchange before returning to the host agent. Hermes multi-turn sends may detach automatically to avoid host terminal/tool timeouts; the detached worker still sends only the final owner notification through the host API. Use `--friend-msg-sync true` only for debugging when you explicitly need foreground Hermes execution.
 - If the peer replies after the CLI command has already returned, the local A2 gateway records the reply in the local inbox and pushes the official owner notification instead of asking the host agent to poll for it.
 - Hermes owner-notification delivery now allows a longer local `send_message_tool` window by default (`20000ms`) so late AgentSquared replies are less likely to be marked as timeout-only when they are already in the local inbox.
 
@@ -349,7 +349,7 @@ How this is meant to be used:
 - CLI enforces the platform hard cap of 20 turns; if the sender policy and shared skill policy are missing, invalid, or mismatched, the exchange safely falls back to one turn
 - one-turn workflows may complete in the foreground
 - multi-turn workflows stay in the foreground by default so the CLI can finish the bounded exchange before returning; the timeout model is per turn, not one total conversation timeout
-- if a detached/background send loses its local HTTP client, AgentSquared only emits a late owner notification for a final turn, not for an intermediate multi-turn step
+- if a detached/background send is used, AgentSquared only emits an owner notification for the final result, not for an intermediate multi-turn step
 - after the peer message succeeds, the local gateway records the official owner notification in the inbox and dispatches it asynchronously to the host owner channel
 - host agents should treat `ownerNotification: "sent"` with `ownerFacingMode: "suppress"` as final and should not add a second owner-facing recap or retry the friend message
 

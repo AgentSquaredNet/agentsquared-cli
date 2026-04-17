@@ -113,7 +113,8 @@ export function parseHermesTaskResult(payload, {
         turnIndex: conversation.turnIndex,
         decision: conversation.decision,
         stopReason: conversation.stopReason,
-        final: conversation.final
+        final: conversation.final,
+        finalize: conversation.final
       }
     },
     ownerReport: {
@@ -126,7 +127,8 @@ export function parseHermesTaskResult(payload, {
       turnIndex: conversation.turnIndex,
       decision: conversation.decision,
       stopReason: conversation.stopReason,
-      final: conversation.final
+      final: conversation.final,
+      finalize: conversation.final
     }
   }
 }

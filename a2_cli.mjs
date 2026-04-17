@@ -298,6 +298,11 @@ async function pushCliOwnerReport({
   deliveryId = ''
 } = {}) {
   const resolvedGatewayBase = clean(gatewayBase)
+  const finalOwnerReport = {
+    ...(ownerReport ?? {}),
+    final: true,
+    finalize: true
+  }
   if (resolvedGatewayBase) {
     try {
       const response = await gatewayOwnerNotification(resolvedGatewayBase, {
@@ -308,9 +313,9 @@ async function pushCliOwnerReport({
         targetAgentId,
         selectedSkill,
         ownerReport: {
-          ...ownerReport,
-          deliveryId: clean(deliveryId) || ownerReport?.deliveryId,
-          dedupeKey: clean(ownerReport?.dedupeKey) || clean(deliveryId)
+          ...finalOwnerReport,
+          deliveryId: clean(deliveryId) || finalOwnerReport?.deliveryId,
+          dedupeKey: clean(finalOwnerReport?.dedupeKey) || clean(deliveryId)
         }
       }, {
         timeoutMs: 3000,
@@ -375,7 +380,7 @@ async function pushCliOwnerReport({
         remoteAgentId: targetAgentId
       },
       selectedSkill,
-      ownerReport
+      ownerReport: finalOwnerReport
     })
   } catch (error) {
     return {
@@ -564,6 +569,7 @@ async function executeLocalConversationTurn({
   conversationKey,
   skillHint,
   sharedSkill,
+  conversationPolicy,
   inboundText,
   originalOwnerText = '',
   localSkillInventory = '',
@@ -592,6 +598,7 @@ async function executeLocalConversationTurn({
         },
         metadata: {
           ...(sharedSkill ? { sharedSkill } : {}),
+          ...(conversationPolicy ? { conversationPolicy } : {}),
           from: targetAgentId,
           to: localAgentId,
           originalOwnerText: clean(originalOwnerText) || clean(inboundText),
@@ -600,7 +607,8 @@ async function executeLocalConversationTurn({
           turnIndex,
           decision: normalizedRemoteControl.decision,
           stopReason: normalizedRemoteControl.stopReason,
-          final: normalizedRemoteControl.final
+          final: normalizedRemoteControl.final,
+          finalize: normalizedRemoteControl.final
         }
       }
     }
@@ -1393,10 +1401,16 @@ async function commandFriendMessage(args) {
     reason: explicitSkillName ? 'explicit-skill-arg' : sharedSkill?.name ? 'shared-skill-file' : 'no-skill-hint'
   }
   const conversationPolicy = resolveOutboundConversationPolicy(sharedSkill)
-  const runInBackground = isTrueFlag(args['background-worker'])
+  const isBackgroundWorker = isTrueFlag(args['background-worker'])
 
-  if (runInBackground) {
-    await ensureGatewayForUse(args)
+  const gateway = await ensureGatewayForUse(args)
+  const gatewayHostRuntime = clean(gateway?.gatewayHealth?.hostRuntime?.resolved || gateway?.gatewayHealth?.hostRuntime?.id).toLowerCase()
+  const shouldDetachForHermesMultiTurn = !isBackgroundWorker
+    && !isTrueFlag(args['friend-msg-sync'])
+    && conversationPolicy.maxTurns > 1
+    && gatewayHostRuntime === 'hermes'
+
+  if (shouldDetachForHermesMultiTurn) {
     spawnFriendMessageWorker(args)
     printJson({
       ok: true,
@@ -1405,7 +1419,7 @@ async function commandFriendMessage(args) {
       conversationMode: 'async',
       ownerNotification: 'sent',
       ownerFacingMode: 'brief',
-      ownerFacingInstruction: 'Tell the owner only that the AgentSquared exchange was started in background mode. Do not check inbox, wait, retry, or add your own follow-up. AgentSquared will push the final conversation result through the host API when it is ready.',
+      ownerFacingInstruction: 'Tell the owner only that the AgentSquared exchange was started through AgentSquared. Do not check inbox, wait, retry, or add your own follow-up. AgentSquared will push the final conversation result through the host API when it is ready.',
       ownerFacingText: 'Sent through AgentSquared.',
       ownerFacingLines: ['Sent through AgentSquared.'],
       stdoutNoticeCode: 'OWNER_NOTIFICATION_SENT',
@@ -1413,8 +1427,6 @@ async function commandFriendMessage(args) {
     })
     return
   }
-
-  const gateway = await ensureGatewayForUse(args)
   const context = {
     agentId: gateway.agentId,
     keyFile: gateway.keyFile,
@@ -1468,7 +1480,8 @@ async function commandFriendMessage(args) {
             turnIndex: currentOutboundControl.turnIndex,
             decision: currentOutboundControl.decision,
             stopReason: currentOutboundControl.stopReason,
-            final: currentOutboundControl.final
+            final: currentOutboundControl.final,
+            finalize: currentOutboundControl.final
           },
           activitySummary: turnIndex === 1
             ? 'Preparing an AgentSquared peer conversation.'
@@ -1498,7 +1511,9 @@ async function commandFriendMessage(args) {
         localDecision: currentOutboundControl.decision,
         localStopReason: currentOutboundControl.stopReason,
         remoteDecision: remoteControl.decision,
-        remoteStopReason: remoteControl.stopReason
+        remoteStopReason: remoteControl.stopReason,
+        localFinal: currentOutboundControl.final,
+        remoteFinal: remoteControl.final
       })
 
       if (currentOutboundControl.final || !shouldContinueConversation(remoteControl)) {
@@ -1529,6 +1544,7 @@ async function commandFriendMessage(args) {
           conversationKey,
           skillHint,
           sharedSkill,
+          conversationPolicy,
           inboundText: replyText,
           originalOwnerText: text,
           localSkillInventory: '',
@@ -1799,7 +1815,7 @@ function helpText() {
     '  --host-runtime <auto|openclaw|hermes>',
     '  OpenClaw: --openclaw-agent --openclaw-command --openclaw-cwd --openclaw-gateway-url --openclaw-gateway-token --openclaw-gateway-password',
     '  Hermes: --hermes-command --hermes-home --hermes-profile --hermes-api-base',
-    '  Friend messaging: --friend-msg-wait-ms <ms> (default: 50000 for one-turn workflows; multi-turn workflows wait in the foreground unless --background-worker true is set)'
+    '  Friend messaging: --friend-msg-wait-ms <ms> (default: 50000 for one-turn workflows; Hermes multi-turn workflows may detach automatically; use --friend-msg-sync true for debugging foreground execution)'
   ].join('\n')
 }
 

@@ -382,7 +382,8 @@ export function createOpenClawAdapter({
               turnIndex: conversation.turnIndex,
               decision: 'done',
               stopReason: 'system-error',
-              final: true
+              final: true,
+              finalize: true
             }
           },
           ownerReport: {
@@ -396,7 +397,8 @@ export function createOpenClawAdapter({
             turnIndex: conversation.turnIndex,
             decision: 'done',
             stopReason: 'system-error',
-            final: true
+            final: true,
+            finalize: true
           }
         }
       }
@@ -457,7 +459,8 @@ export function createOpenClawAdapter({
               turnIndex: conversation.turnIndex,
               decision: conversation.decision,
               stopReason: safetyStopReason,
-              final: true
+              final: true,
+              finalize: true
             }
           },
           ownerReport: {
@@ -470,7 +473,8 @@ export function createOpenClawAdapter({
             turnIndex: conversation.turnIndex,
             decision: conversation.decision,
             stopReason: safetyStopReason,
-            final: true
+            final: true,
+            finalize: true
           }
         }
       }
@@ -652,7 +656,8 @@ export function createOpenClawAdapter({
             turnIndex: conversation.turnIndex,
             decision: conversation.decision,
             stopReason: conversation.stopReason,
-            final: conversation.final
+            final: conversation.final,
+            finalize: conversation.final
           }
         },
         ownerReport: {
@@ -669,7 +674,8 @@ export function createOpenClawAdapter({
           turnIndex: conversation.turnIndex,
           decision: conversation.decision,
           stopReason: conversation.stopReason,
-          final: conversation.final
+          final: conversation.final,
+          finalize: conversation.final
         }
       }
     })
