@@ -19,6 +19,7 @@ import { createInboxStore } from './lib/gateway/inbox.mjs'
 import { createGatewayRuntimeState } from './lib/gateway/runtime_state.mjs'
 import { assertNoExistingLocalActivation, ensureGatewayForUse } from './lib/gateway/lifecycle.mjs'
 import { currentRuntimeRevision } from './lib/gateway/state.mjs'
+import { notifyLateConnectResult } from './lib/gateway/server.mjs'
 import { chooseInboundSkill, createAgentRouter, createMailboxScheduler } from './lib/routing/agent_router.mjs'
 import { createLiveConversationStore } from './lib/conversation/store.mjs'
 import { createLocalRuntimeExecutor, createOwnerNotifier } from './lib/runtime/executor.mjs'
@@ -170,6 +171,55 @@ async function main() {
     )
     assert.ok(Date.now() - startedAt < 450)
     await new Promise((resolve) => slowServer.close(resolve))
+  }
+
+  {
+    const notifications = []
+    await notifyLateConnectResult({
+      ownerNotifier: async (payload) => {
+        notifications.push(payload)
+        return { delivered: true }
+      },
+      agentId: 'hermes@Jessica',
+      body: {
+        targetAgentId: 'claw@Skiyo',
+        skillHint: 'agent_mutual_learning',
+        metadata: {
+          conversationKey: 'conversation_late_test',
+          sentAt: '2026-04-17T02:44:01Z',
+          originalOwnerText: 'learn his skills',
+          turnIndex: 1
+        },
+        message: {
+          kind: 'message',
+          role: 'user',
+          parts: [{ kind: 'text', text: 'learn his skills' }]
+        }
+      },
+      result: {
+        peerSessionId: 'peer_late_test',
+        response: {
+          message: {
+            kind: 'message',
+            role: 'agent',
+            parts: [{ kind: 'text', text: 'Here are my skills and what is worth learning.' }]
+          },
+          metadata: {
+            conversationKey: 'conversation_late_test',
+            turnIndex: 1,
+            decision: 'done',
+            stopReason: 'completed',
+            finalize: true
+          }
+        }
+      }
+    })
+    assert.equal(notifications.length, 1)
+    assert.equal(notifications[0].selectedSkill, 'agent_mutual_learning')
+    assert.equal(notifications[0].ownerReport?.conversationKey, 'conversation_late_test')
+    assert.equal(notifications[0].ownerReport?.finalize, true)
+    assert.match(`${notifications[0].ownerReport?.message ?? ''}`, /late|timed out|asynchronously/i)
+    assert.match(`${notifications[0].peerResponse?.message?.parts?.[0]?.text ?? ''}`, /worth learning/i)
   }
 
   const protocol = '/agentsquared/test/1.0'

@@ -135,6 +135,7 @@ a2-cli friend msg \
 Useful reliability option:
 
 - `--friend-msg-wait-ms <ms>` limits how long the CLI waits for the local gateway to return a confirmed peer result. The default is `50000`, so host terminals with a 60s command limit can still receive a clear "possibly delivered, do not auto-retry" result instead of killing the command.
+- If the peer replies after that wait window expires, the local A2 gateway now records the late final reply in the local inbox and pushes an asynchronous owner notification instead of silently dropping it.
 
 Owner notification behavior:
 
