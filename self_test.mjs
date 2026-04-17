@@ -1036,6 +1036,65 @@ process.exit(2)
     assert.equal(responded[0].result.metadata.selectedSkill, 'workflow_alpha')
     assert.equal(ownerReports.length, 1)
     assert.equal(ownerReports[0].ownerReport.summary, 'owner saw router1')
+    assert.equal(ownerReports[0].notifyOwnerNow, true)
+
+    const continuedOwnerReports = []
+    const continuingRouter = createAgentRouter({
+      maxActiveMailboxes: 1,
+      routerSkills: ['workflow_alpha'],
+      defaultSkill: 'workflow_alpha',
+      async executeInbound({ item, selectedSkill }) {
+        return {
+          peerResponse: {
+            message: {
+              kind: 'message',
+              role: 'agent',
+              parts: [{ kind: 'text', text: `continue:${item.inboundId}` }]
+            },
+            metadata: {
+              selectedSkill,
+              conversationKey: 'conv-router-continue',
+              decision: 'continue',
+              stopReason: 'completed',
+              finalize: false
+            }
+          },
+          ownerReport: {
+            summary: `owner saw continuing ${item.inboundId}`,
+            selectedSkill,
+            conversationKey: 'conv-router-continue',
+            decision: 'continue',
+            stopReason: 'completed',
+            finalize: false
+          }
+        }
+      },
+      async notifyOwner(payload) {
+        continuedOwnerReports.push(payload)
+      },
+      async onRespond() {},
+      async onReject() {}
+    })
+    await continuingRouter.enqueue({
+      inboundId: 'router-continue-1',
+      remoteAgentId: 'peer@Test',
+      request: {
+        method: 'message/send',
+        params: {
+          metadata: {
+            conversationKey: 'conv-router-continue'
+          },
+          message: {
+            parts: [{ kind: 'text', text: 'let us continue' }]
+          }
+        }
+      }
+    })
+    await continuingRouter.whenIdle()
+    assert.equal(continuedOwnerReports.length, 1)
+    assert.equal(continuedOwnerReports[0].notifyOwnerNow, true)
+    assert.equal(continuedOwnerReports[0].conversation.finalize, false)
+    assert.equal(continuedOwnerReports[0].conversation.decision, 'continue')
 
     const fallbackResponded = []
     const fallbackRejected = []
