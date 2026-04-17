@@ -61,7 +61,7 @@ function buildReceiverTurnOutline(turns = [], expectedTurnCount = 1) {
     }
     const inbound = excerpt(turn.inboundText)
     const reply = excerpt(turn.replyText)
-    const isFinalTurn = Boolean(turn.finalize) || ['done', 'handoff'].includes(clean(turn.decision).toLowerCase())
+    const isFinalTurn = Boolean(turn.final) || clean(turn.decision).toLowerCase() === 'done'
     return {
       turnIndex: displayTurnIndex,
       summary: [
@@ -391,9 +391,8 @@ export function createHermesAdapter({
       const peerReplyText = 'I am pausing this AgentSquared request because this peer has reached the recent conversation window limit. My owner can decide whether to continue later.'
       const conversation = normalizeConversationControl(item?.request?.params?.metadata ?? {}, {
         defaultTurnIndex: 1,
-        defaultDecision: 'handoff',
-        defaultStopReason: 'system-error',
-        defaultFinalize: true
+        defaultDecision: 'done',
+        defaultStopReason: 'system-error'
       })
       const updatedConversation = conversationStore?.appendTurn?.({
         conversationKey,
@@ -404,9 +403,9 @@ export function createHermesAdapter({
         turnIndex: conversation.turnIndex,
         inboundText: displayInboundText,
         replyText: peerReplyText,
-        decision: 'handoff',
+        decision: 'done',
         stopReason: 'system-error',
-        finalize: true,
+        final: true,
         ownerSummary: `I paused this exchange because the recent peer conversation window was exceeded. Current 10-minute turn count: ${budget.windowTurns}.`
       }) ?? null
       const ownerReport = buildReceiverBaseReport({
@@ -440,9 +439,9 @@ export function createHermesAdapter({
             runtimeAdapter: 'hermes',
             conversationKey,
             turnIndex: conversation.turnIndex,
-            decision: 'handoff',
+            decision: 'done',
             stopReason: 'system-error',
-            finalize: true
+            final: true
           }
         },
         ownerReport: {
@@ -450,9 +449,9 @@ export function createHermesAdapter({
           runtimeAdapter: 'hermes',
           conversationKey,
           turnIndex: conversation.turnIndex,
-          decision: 'handoff',
+          decision: 'done',
           stopReason: 'system-error',
-          finalize: true
+          final: true
         }
       }
     }
@@ -475,9 +474,8 @@ export function createHermesAdapter({
       const peerReplyText = scrubOutboundText(clean(safety.peerResponse))
       const conversation = normalizeConversationControl(item?.request?.params?.metadata ?? {}, {
         defaultTurnIndex: 1,
-        defaultDecision: safety.action === 'owner-approval' ? 'handoff' : 'done',
-        defaultStopReason: safetyStopReason,
-        defaultFinalize: true
+        defaultDecision: 'done',
+        defaultStopReason: safetyStopReason
       })
       const updatedConversation = conversationStore?.appendTurn?.({
         conversationKey,
@@ -490,7 +488,7 @@ export function createHermesAdapter({
         replyText: peerReplyText,
         decision: conversation.decision,
         stopReason: safetyStopReason,
-        finalize: true,
+        final: true,
         ownerSummary: clean(safety.ownerSummary)
       }) ?? null
       const ownerReport = buildReceiverBaseReport({
@@ -528,7 +526,7 @@ export function createHermesAdapter({
             turnIndex: conversation.turnIndex,
             decision: conversation.decision,
             stopReason: safetyStopReason,
-            finalize: true
+            final: true
           }
         },
         ownerReport: {
@@ -540,7 +538,7 @@ export function createHermesAdapter({
           turnIndex: conversation.turnIndex,
           decision: conversation.decision,
           stopReason: safetyStopReason,
-          finalize: true
+          final: true
         }
       }
     }
@@ -548,8 +546,7 @@ export function createHermesAdapter({
     const conversationControl = normalizeConversationControl(item?.request?.params?.metadata ?? {}, {
       defaultTurnIndex: 1,
       defaultDecision: 'done',
-      defaultStopReason: '',
-      defaultFinalize: false
+      defaultStopReason: ''
     })
     if (conversationControl.turnIndex === 1) {
       conversationStore?.endConversation?.(conversationKey)
@@ -581,15 +578,13 @@ export function createHermesAdapter({
       remoteAgentId,
       inboundId: clean(item?.inboundId),
       defaultTurnIndex: conversationControl.turnIndex,
-      defaultDecision: conversationControl.finalize ? 'done' : (conversationControl.turnIndex < resolveSkillMaxTurns(selectedSkill, metadata?.sharedSkill ?? null) ? 'continue' : 'done'),
-      defaultStopReason: conversationControl.finalize ? 'completed' : '',
-      defaultFinalize: conversationControl.finalize
+      defaultDecision: conversationControl.final ? 'done' : (conversationControl.turnIndex < resolveSkillMaxTurns(selectedSkill, metadata?.sharedSkill ?? null) ? 'continue' : 'done'),
+      defaultStopReason: conversationControl.final ? 'completed' : ''
     })
     const conversation = normalizeConversationControl(parsed?.peerResponse?.metadata ?? item?.request?.params?.metadata ?? {}, {
       defaultTurnIndex: 1,
       defaultDecision: 'done',
-      defaultStopReason: '',
-      defaultFinalize: true
+      defaultStopReason: ''
     })
     const safePeerReplyText = scrubOutboundText(clean(parsed.peerResponse?.message?.parts?.[0]?.text))
     const safeOwnerSummary = scrubOutboundText(clean(parsed.ownerReport?.summary))
@@ -604,7 +599,7 @@ export function createHermesAdapter({
       replyText: safePeerReplyText,
       decision: conversation.decision,
       stopReason: conversation.stopReason,
-      finalize: conversation.finalize,
+      final: conversation.final,
       ownerSummary: safeOwnerSummary
     }) ?? null
     const turnOutline = buildReceiverTurnOutline(updatedConversation?.turns ?? [], conversation.turnIndex)
@@ -633,8 +628,8 @@ export function createHermesAdapter({
       timeZone: ownerTimeZone,
       localTime: true
     })
-    if (conversation.finalize) {
-      conversationStore?.finalizeConversation?.(updatedConversation?.conversationKey || liveConversation?.conversationKey || conversationKey, safeOwnerSummary)
+    if (conversation.final) {
+      conversationStore?.closeConversation?.(updatedConversation?.conversationKey || liveConversation?.conversationKey || conversationKey, safeOwnerSummary)
     }
     return {
       ...parsed,
@@ -654,7 +649,7 @@ export function createHermesAdapter({
           turnIndex: conversation.turnIndex,
           decision: conversation.decision,
           stopReason: conversation.stopReason,
-          finalize: conversation.finalize
+          final: conversation.final
         }
       },
       ownerReport: {
@@ -668,7 +663,7 @@ export function createHermesAdapter({
         turnIndex: conversation.turnIndex,
         decision: conversation.decision,
         stopReason: conversation.stopReason,
-        finalize: conversation.finalize
+        final: conversation.final
       }
     }
   }

@@ -77,7 +77,7 @@ function buildReceiverTurnOutline(turns = [], expectedTurnCount = 1) {
     }
     const inbound = excerpt(turn.inboundText)
     const reply = excerpt(turn.replyText)
-    const isFinalTurn = Boolean(turn.finalize) || ['done', 'handoff'].includes(clean(turn.decision).toLowerCase())
+    const isFinalTurn = Boolean(turn.final) || clean(turn.decision).toLowerCase() === 'done'
     return {
       turnIndex: displayTurnIndex,
       summary: [
@@ -329,9 +329,8 @@ export function createOpenClawAdapter({
         const peerReplyText = 'I am pausing this AgentSquared request because this peer has reached the recent conversation window limit. My owner can decide whether to continue later.'
         const conversation = normalizeConversationControl(item?.request?.params?.metadata ?? {}, {
           defaultTurnIndex: 1,
-          defaultDecision: 'handoff',
-          defaultStopReason: 'system-error',
-          defaultFinalize: true
+          defaultDecision: 'done',
+          defaultStopReason: 'system-error'
         })
         const updatedConversation = conversationStore?.appendTurn?.({
           conversationKey,
@@ -342,9 +341,9 @@ export function createOpenClawAdapter({
           turnIndex: conversation.turnIndex,
           inboundText: displayInboundText,
           replyText: peerReplyText,
-          decision: 'handoff',
+          decision: 'done',
           stopReason: 'system-error',
-          finalize: true,
+          final: true,
           ownerSummary: `I paused this exchange because the recent peer conversation window was exceeded. Current 10-minute turn count: ${budget.windowTurns}.`
         }) ?? null
         const ownerReport = buildReceiverBaseReport({
@@ -377,13 +376,13 @@ export function createOpenClawAdapter({
               selectedSkill,
               runtimeAdapter: 'openclaw',
               conversationKey,
-              safetyDecision: 'owner-approval',
+              safetyDecision: 'rate-limit',
               safetyReason: 'peer-conversation-window-exceeded',
               windowTurns: budget.windowTurns,
               turnIndex: conversation.turnIndex,
-              decision: 'handoff',
+              decision: 'done',
               stopReason: 'system-error',
-              finalize: true
+              final: true
             }
           },
           ownerReport: {
@@ -391,13 +390,13 @@ export function createOpenClawAdapter({
             selectedSkill,
             runtimeAdapter: 'openclaw',
             conversationKey,
-            safetyDecision: 'owner-approval',
+            safetyDecision: 'rate-limit',
             safetyReason: 'peer-conversation-window-exceeded',
             windowTurns: budget.windowTurns,
             turnIndex: conversation.turnIndex,
-            decision: 'handoff',
+            decision: 'done',
             stopReason: 'system-error',
-            finalize: true
+            final: true
           }
         }
       }
@@ -406,9 +405,8 @@ export function createOpenClawAdapter({
         const peerReplyText = scrubOutboundText(clean(safety.peerResponse))
         const conversation = normalizeConversationControl(item?.request?.params?.metadata ?? {}, {
           defaultTurnIndex: 1,
-          defaultDecision: safety.action === 'owner-approval' ? 'handoff' : 'done',
-          defaultStopReason: safetyStopReason,
-          defaultFinalize: true
+          defaultDecision: 'done',
+          defaultStopReason: safetyStopReason
         })
         const updatedConversation = conversationStore?.appendTurn?.({
           conversationKey,
@@ -421,7 +419,7 @@ export function createOpenClawAdapter({
           replyText: peerReplyText,
           decision: conversation.decision,
           stopReason: safetyStopReason,
-          finalize: true,
+          final: true,
           ownerSummary: clean(safety.ownerSummary)
         }) ?? null
         const ownerReport = buildReceiverBaseReport({
@@ -459,7 +457,7 @@ export function createOpenClawAdapter({
               turnIndex: conversation.turnIndex,
               decision: conversation.decision,
               stopReason: safetyStopReason,
-              finalize: true
+              final: true
             }
           },
           ownerReport: {
@@ -472,7 +470,7 @@ export function createOpenClawAdapter({
             turnIndex: conversation.turnIndex,
             decision: conversation.decision,
             stopReason: safetyStopReason,
-            finalize: true
+            final: true
           }
         }
       }
@@ -481,8 +479,7 @@ export function createOpenClawAdapter({
       const inboundConversation = normalizeConversationControl(item?.request?.params?.metadata ?? {}, {
         defaultTurnIndex: 1,
         defaultDecision: 'done',
-        defaultStopReason: '',
-        defaultFinalize: false
+        defaultStopReason: ''
       })
       const metadata = item?.request?.params?.metadata ?? {}
       if (inboundConversation.turnIndex === 1) {
@@ -497,7 +494,7 @@ export function createOpenClawAdapter({
       const conversationTranscript = conversationStore?.transcript?.(liveConversation?.conversationKey || conversationKey) ?? ''
       const relationshipSummary = await readRelationshipSummary(client, relationSessionKey)
       const localSkillMaxTurns = resolveSkillMaxTurns(selectedSkill, metadata?.sharedSkill ?? null)
-      const defaultShouldContinue = !inboundConversation.finalize
+      const defaultShouldContinue = !inboundConversation.final
         && inboundConversation.turnIndex < localSkillMaxTurns
       const sessionKey = stableId(
         'agentsquared-work',
@@ -563,14 +560,12 @@ export function createOpenClawAdapter({
         inboundId: clean(item?.inboundId),
         defaultTurnIndex: inboundConversation.turnIndex,
         defaultDecision: defaultShouldContinue ? 'continue' : 'done',
-        defaultStopReason: inboundConversation.finalize ? 'completed' : '',
-        defaultFinalize: inboundConversation.finalize ? true : !defaultShouldContinue
+        defaultStopReason: inboundConversation.final ? 'completed' : ''
       })
       const conversation = normalizeConversationControl(parsed?.peerResponse?.metadata ?? item?.request?.params?.metadata ?? {}, {
         defaultTurnIndex: 1,
         defaultDecision: 'done',
-        defaultStopReason: '',
-        defaultFinalize: true
+        defaultStopReason: ''
       })
       const safePeerReplyText = scrubOutboundText(peerResponseText(parsed.peerResponse))
       const safeOwnerSummary = scrubOutboundText(clean(parsed.ownerReport?.summary))
@@ -585,7 +580,7 @@ export function createOpenClawAdapter({
         replyText: safePeerReplyText,
         decision: conversation.decision,
         stopReason: conversation.stopReason,
-        finalize: conversation.finalize,
+        final: conversation.final,
         ownerSummary: safeOwnerSummary
       }) ?? null
       const turnOutline = buildReceiverTurnOutline(updatedConversation?.turns ?? [], conversation.turnIndex)
@@ -615,7 +610,7 @@ export function createOpenClawAdapter({
         localTime: true
       })
       let relationshipMemoryRunId = ''
-      if (conversation.finalize) {
+      if (conversation.final) {
         await persistRelationshipSummary(client, {
           relationSessionKey,
           remoteAgentId,
@@ -631,7 +626,7 @@ export function createOpenClawAdapter({
         }).then((runId) => {
           relationshipMemoryRunId = clean(runId)
         })
-        conversationStore?.finalizeConversation?.(updatedConversation?.conversationKey || liveConversation?.conversationKey || conversationKey, safeOwnerSummary)
+        conversationStore?.closeConversation?.(updatedConversation?.conversationKey || liveConversation?.conversationKey || conversationKey, safeOwnerSummary)
       }
       return {
         ...parsed,
@@ -653,7 +648,7 @@ export function createOpenClawAdapter({
             turnIndex: conversation.turnIndex,
             decision: conversation.decision,
             stopReason: conversation.stopReason,
-            finalize: conversation.finalize
+            final: conversation.final
           }
         },
         ownerReport: {
@@ -670,7 +665,7 @@ export function createOpenClawAdapter({
           turnIndex: conversation.turnIndex,
           decision: conversation.decision,
           stopReason: conversation.stopReason,
-          finalize: conversation.finalize
+          final: conversation.final
         }
       }
     })
@@ -693,7 +688,7 @@ export function createOpenClawAdapter({
       }
       const conversationKey = clean(ownerReport?.conversationKey)
       const reportTurnIndex = clean(ownerReport?.turnIndex)
-      const isFinalReport = Boolean(ownerReport?.finalize)
+      const isFinalReport = Boolean(ownerReport?.final)
       const idempotencyKey = stableId(
         'agentsquared-owner',
         isFinalReport && conversationKey

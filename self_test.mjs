@@ -209,7 +209,7 @@ async function main() {
             turnIndex: 1,
             decision: 'done',
             stopReason: 'completed',
-            finalize: true
+            final: true
           }
         }
       }
@@ -217,7 +217,7 @@ async function main() {
     assert.equal(notifications.length, 1)
     assert.equal(notifications[0].selectedSkill, 'agent_mutual_learning')
     assert.equal(notifications[0].ownerReport?.conversationKey, 'conversation_late_test')
-    assert.equal(notifications[0].ownerReport?.finalize, true)
+    assert.equal(notifications[0].ownerReport?.final, true)
     assert.match(`${notifications[0].ownerReport?.message ?? ''}`, /late|timed out|asynchronously/i)
     assert.match(`${notifications[0].peerResponse?.message?.parts?.[0]?.text ?? ''}`, /worth learning/i)
   }
@@ -694,7 +694,7 @@ process.exit(2)
         inboundText: 'separate conversation',
         replyText: 'separate reply',
         decision: 'done',
-        finalize: true
+        final: true
       })
       assert.equal(secondConversation.turns.length, 1)
       assert.equal(liveStore.getConversation('conv-demo-1').turns.length, 1)
@@ -773,7 +773,7 @@ process.exit(2)
               turnIndex: 4,
               decision: 'continue',
               stopReason: '',
-              finalize: false
+              final: false
             },
             message: {
               kind: 'message',
@@ -911,7 +911,7 @@ process.exit(2)
             metadata: {
               turnIndex: 3,
               decision: 'continue',
-              finalize: false,
+              final: false,
               sharedSkill: {
                 name: 'workflow_beta',
                 maxTurns: 8,
@@ -1036,7 +1036,6 @@ process.exit(2)
     assert.equal(responded[0].result.metadata.selectedSkill, 'workflow_alpha')
     assert.equal(ownerReports.length, 1)
     assert.equal(ownerReports[0].ownerReport.summary, 'owner saw router1')
-    assert.equal('notifyOwnerNow' in ownerReports[0], false)
 
     const continuedOwnerReports = []
     const continuingRouter = createAgentRouter({
@@ -1056,7 +1055,7 @@ process.exit(2)
               conversationKey: 'conv-router-continue',
               decision: 'continue',
               stopReason: 'completed',
-              finalize: false
+              final: false
             }
           },
           ownerReport: {
@@ -1065,7 +1064,7 @@ process.exit(2)
             conversationKey: 'conv-router-continue',
             decision: 'continue',
             stopReason: 'completed',
-            finalize: false
+            final: false
           }
         }
       },
@@ -1091,8 +1090,7 @@ process.exit(2)
       }
     })
     assert.equal(continuedOwnerReports.length, 1)
-    assert.equal('notifyOwnerNow' in continuedOwnerReports[0], false)
-    assert.equal(continuedOwnerReports[0].conversation.finalize, false)
+    assert.equal(continuedOwnerReports[0].conversation.final, false)
     assert.equal(continuedOwnerReports[0].conversation.decision, 'continue')
 
     const fallbackResponded = []
@@ -1219,7 +1217,6 @@ process.exit(2)
       ownerReport: 'OpenClaw owner report',
       decision: 'continue',
       stopReason: '',
-      finalize: false,
       turnIndex: 2
     }), {
       defaultSkill: 'workflow_alpha',
@@ -1233,7 +1230,7 @@ process.exit(2)
     assert.equal(parsedOpenClaw.peerResponse.metadata.modelSelectedSkill, 'workflow_beta')
     assert.equal(parsedOpenClaw.peerResponse.metadata.turnIndex, 2)
     assert.equal(parsedOpenClaw.peerResponse.metadata.decision, 'continue')
-    assert.equal(parsedOpenClaw.peerResponse.metadata.finalize, false)
+    assert.equal(parsedOpenClaw.peerResponse.metadata.final, false)
     const parsedOpenClawDefaults = parseOpenClawTaskResult(JSON.stringify({
       peerResponse: 'Keep going',
       ownerReport: 'Continue learning'
@@ -1243,13 +1240,12 @@ process.exit(2)
       inboundId: 'router-openclaw-defaults',
       defaultTurnIndex: 3,
       defaultDecision: 'continue',
-      defaultStopReason: '',
-      defaultFinalize: false
+      defaultStopReason: ''
     })
     assert.equal(parsedOpenClawDefaults.peerResponse.metadata.turnIndex, 3)
     assert.equal(parsedOpenClawDefaults.peerResponse.metadata.decision, 'continue')
-    assert.equal(parsedOpenClawDefaults.peerResponse.metadata.finalize, false)
-    const parsedEscapedOpenClaw = parseOpenClawTaskResult('\\n{\\n  \\"selectedSkill\\": \\"workflow_beta\\",\\n  \\"peerResponse\\": \\"Escaped JSON works\\",\\n  \\"ownerReport\\": \\"Escaped owner report\\",\\n  \\"decision\\": \\"done\\",\\n  \\"stopReason\\": \\"peer-requested-stop\\",\\n  \\"finalize\\": true,\\n  \\"turnIndex\\": 3\\n}', {
+    assert.equal(parsedOpenClawDefaults.peerResponse.metadata.final, false)
+    const parsedEscapedOpenClaw = parseOpenClawTaskResult('\\n{\\n  \\"selectedSkill\\": \\"workflow_beta\\",\\n  \\"peerResponse\\": \\"Escaped JSON works\\",\\n  \\"ownerReport\\": \\"Escaped owner report\\",\\n  \\"decision\\": \\"done\\",\\n  \\"stopReason\\": \\"completed\\",\\n  \\"turnIndex\\": 3\\n}', {
       defaultSkill: 'workflow_alpha',
       remoteAgentId: 'peer@Test',
       inboundId: 'router-openclaw-escaped'
@@ -1258,7 +1254,7 @@ process.exit(2)
     assert.equal(parsedEscapedOpenClaw.ownerReport.summary, 'Escaped owner report')
     assert.equal(parsedEscapedOpenClaw.peerResponse.metadata.turnIndex, 3)
     assert.equal(parsedEscapedOpenClaw.peerResponse.metadata.stopReason, 'completed')
-    assert.equal(parsedEscapedOpenClaw.peerResponse.metadata.finalize, true)
+    assert.equal(parsedEscapedOpenClaw.peerResponse.metadata.final, true)
     assert.equal(shouldContinueConversation(parsedOpenClaw.peerResponse.metadata), true)
     assert.equal(resolveSkillMaxTurns('workflow_alpha'), 1)
     assert.equal(resolveSkillMaxTurns('workflow_beta', { name: 'workflow_beta', maxTurns: 99 }), PLATFORM_MAX_TURNS)
@@ -1270,10 +1266,9 @@ process.exit(2)
       normalizeConversationControl({}, {
         defaultTurnIndex: 1,
         defaultDecision: 'done',
-        defaultStopReason: 'completed',
-        defaultFinalize: true
+        defaultStopReason: 'completed'
       }),
-      { turnIndex: 1, decision: 'done', stopReason: 'completed', finalize: true }
+      { turnIndex: 1, decision: 'done', stopReason: 'completed', final: true }
     )
     const outboundTemplate = buildSkillOutboundText({
       localAgentId: 'agent-a@owner-a',
@@ -1501,7 +1496,7 @@ process.exit(2)
               turnIndex: 1,
               decision: 'done',
               stopReason: 'completed',
-              finalize: true
+              final: true
             })
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({
@@ -1734,7 +1729,7 @@ process.exit(2)
       })
     }
     assert.equal(budgetExecution.peerResponse.metadata.safetyReason, 'peer-conversation-window-exceeded')
-    assert.equal(budgetExecution.peerResponse.metadata.safetyDecision, 'owner-approval')
+    assert.equal(budgetExecution.peerResponse.metadata.safetyDecision, 'rate-limit')
 
     const openclawInbox = createInboxStore({
       inboxDir: path.join(tempDir, 'openclaw-owner-inbox')
@@ -1800,7 +1795,7 @@ process.exit(2)
       ownerReport: {
         summary: 'duplicate final summary',
         conversationKey: 'conv-final-dedupe',
-        finalize: true
+        final: true
       },
       peerResponse: openclawExecution.peerResponse
     })
@@ -1818,7 +1813,7 @@ process.exit(2)
       ownerReport: {
         summary: 'duplicate final summary second time',
         conversationKey: 'conv-final-dedupe',
-        finalize: true
+        final: true
       },
       peerResponse: openclawExecution.peerResponse
     })
@@ -2043,7 +2038,7 @@ process.exit(2)
       ownerReport: {
         summary: 'first final summary',
         conversationKey: 'conv-final-upsert',
-        finalize: true
+        final: true
       },
       ownerDelivery: {
         attempted: true,
@@ -2085,7 +2080,7 @@ process.exit(2)
       ownerReport: {
         summary: 'second final summary',
         conversationKey: 'conv-final-upsert',
-        finalize: true
+        final: true
       },
       ownerDelivery: {
         attempted: true,

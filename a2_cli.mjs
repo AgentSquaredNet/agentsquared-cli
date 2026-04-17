@@ -508,8 +508,7 @@ async function executeLocalConversationTurn({
   const normalizedRemoteControl = normalizeConversationControl(remoteControl ?? {}, {
     defaultTurnIndex: Math.max(1, Number.parseInt(`${turnIndex ?? 1}`, 10) - 1),
     defaultDecision: 'done',
-    defaultStopReason: '',
-    defaultFinalize: false
+    defaultStopReason: ''
   })
   const item = {
     inboundId: `local-turn-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -536,7 +535,7 @@ async function executeLocalConversationTurn({
           turnIndex,
           decision: normalizedRemoteControl.decision,
           stopReason: normalizedRemoteControl.stopReason,
-          finalize: normalizedRemoteControl.finalize
+          final: normalizedRemoteControl.final
         }
       }
     }
@@ -1343,8 +1342,7 @@ async function commandFriendMessage(args) {
   let currentOutboundControl = normalizeConversationControl({
     turnIndex: 1,
     decision: conversationPolicy.maxTurns <= 1 ? 'done' : 'continue',
-    stopReason: conversationPolicy.maxTurns <= 1 ? 'completed' : '',
-    finalize: conversationPolicy.maxTurns <= 1
+    stopReason: conversationPolicy.maxTurns <= 1 ? 'completed' : ''
   })
   let turnIndex = 1
   let localStopReason = ''
@@ -1370,7 +1368,7 @@ async function commandFriendMessage(args) {
             turnIndex: currentOutboundControl.turnIndex,
             decision: currentOutboundControl.decision,
             stopReason: currentOutboundControl.stopReason,
-            finalize: currentOutboundControl.finalize
+            final: currentOutboundControl.final
           },
           activitySummary: turnIndex === 1
             ? 'Preparing an AgentSquared peer conversation.'
@@ -1391,8 +1389,7 @@ async function commandFriendMessage(args) {
       const remoteControl = normalizeConversationControl(extractPeerResponseMetadata(result.response), {
         defaultTurnIndex: turnIndex,
         defaultDecision: 'done',
-        defaultStopReason: turnIndex >= conversationPolicy.maxTurns ? 'completed' : '',
-        defaultFinalize: turnIndex >= conversationPolicy.maxTurns
+        defaultStopReason: turnIndex >= conversationPolicy.maxTurns ? 'completed' : ''
       })
       turnLog.push({
         turnIndex,
@@ -1400,13 +1397,11 @@ async function commandFriendMessage(args) {
         replyText,
         localDecision: currentOutboundControl.decision,
         localStopReason: currentOutboundControl.stopReason,
-        localFinalize: currentOutboundControl.finalize,
         remoteDecision: remoteControl.decision,
-        remoteStopReason: remoteControl.stopReason,
-        remoteFinalize: remoteControl.finalize
+        remoteStopReason: remoteControl.stopReason
       })
 
-      if (currentOutboundControl.finalize || !shouldContinueConversation(remoteControl)) {
+      if (currentOutboundControl.final || !shouldContinueConversation(remoteControl)) {
         break
       }
 
@@ -1452,8 +1447,7 @@ async function commandFriendMessage(args) {
       const localControl = normalizeConversationControl(localExecution?.peerResponse?.metadata ?? {}, {
         defaultTurnIndex: nextTurnIndex,
         defaultDecision: nextTurnIndex >= conversationPolicy.maxTurns ? 'done' : 'continue',
-        defaultStopReason: nextTurnIndex >= conversationPolicy.maxTurns ? 'completed' : '',
-        defaultFinalize: nextTurnIndex >= conversationPolicy.maxTurns
+        defaultStopReason: nextTurnIndex >= conversationPolicy.maxTurns ? 'completed' : ''
       })
       currentOutboundText = scrubOutboundText(peerResponseText(localExecution.peerResponse))
       if (!currentOutboundText) {
@@ -1462,7 +1456,7 @@ async function commandFriendMessage(args) {
       }
       turnIndex = nextTurnIndex
       currentOutboundControl = localControl
-      if (localControl.finalize && clean(localControl.stopReason)) {
+      if (localControl.final && clean(localControl.stopReason)) {
         localStopReason = localControl.stopReason
       }
     }
@@ -1539,8 +1533,7 @@ async function commandFriendMessage(args) {
   const finalRemoteControl = normalizeConversationControl(extractPeerResponseMetadata(result.response), {
     defaultTurnIndex: turnIndex,
     defaultDecision: 'done',
-    defaultStopReason: localStopReason || '',
-    defaultFinalize: true
+    defaultStopReason: localStopReason || ''
   })
   let summarizedOverall = ''
   let summarizedDetailedConversation = []

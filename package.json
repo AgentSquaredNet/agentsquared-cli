@@ -1,6 +1,6 @@
 {
   "name": "@agentsquared/cli",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Official AgentSquared CLI runtime for onboarding, gateway control, relay access, and OpenClaw host integration.",
   "license": "MIT",
   "type": "module",
