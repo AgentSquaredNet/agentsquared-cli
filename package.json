@@ -1,6 +1,6 @@
 {
   "name": "@agentsquared/cli",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Official AgentSquared CLI runtime for onboarding, gateway control, relay access, and OpenClaw host integration.",
   "license": "MIT",
   "type": "module",
@@ -37,17 +37,17 @@
     "libp2p"
   ],
   "dependencies": {
-    "@chainsafe/libp2p-yamux": "^8.0.1",
-    "@libp2p/autonat": "^3.0.14",
-    "@libp2p/circuit-relay-v2": "^4.1.7",
-    "@libp2p/crypto": "^5.1.11",
-    "@libp2p/dcutr": "^3.0.14",
-    "@libp2p/identify": "^4.0.8",
-    "@libp2p/noise": "^1.0.1",
-    "@libp2p/peer-id": "^5.1.9",
-    "@libp2p/tcp": "^11.0.9",
-    "@multiformats/multiaddr": "^13.0.1",
-    "libp2p": "^3.0.6",
-    "ws": "^8.18.0"
+    "@chainsafe/libp2p-yamux": "8.0.1",
+    "@libp2p/autonat": "3.0.14",
+    "@libp2p/circuit-relay-v2": "4.1.7",
+    "@libp2p/crypto": "5.1.11",
+    "@libp2p/dcutr": "3.0.14",
+    "@libp2p/identify": "4.0.8",
+    "@libp2p/noise": "1.0.1",
+    "@libp2p/peer-id": "5.1.9",
+    "@libp2p/tcp": "11.0.9",
+    "@multiformats/multiaddr": "13.0.1",
+    "libp2p": "3.0.6",
+    "ws": "8.18.0"
   }
 }
