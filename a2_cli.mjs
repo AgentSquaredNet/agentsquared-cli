@@ -1387,9 +1387,7 @@ async function commandFriendMessage(args) {
     reason: explicitSkillName ? 'explicit-skill-arg' : sharedSkill?.name ? 'shared-skill-file' : 'no-skill-hint'
   }
   const conversationPolicy = resolveConversationPolicy(skillHint, sharedSkill)
-  const runInBackground = conversationPolicy.maxTurns > 1
-    && !isTrueFlag(args['background-worker'])
-    && !isTrueFlag(args['friend-msg-sync'])
+  const runInBackground = isTrueFlag(args['background-worker'])
 
   if (runInBackground) {
     await ensureGatewayForUse(args)
@@ -1401,7 +1399,7 @@ async function commandFriendMessage(args) {
       conversationMode: 'async',
       ownerNotification: 'sent',
       ownerFacingMode: 'brief',
-      ownerFacingInstruction: 'Tell the owner only that the AgentSquared exchange was started. Do not check inbox, wait, retry, or add your own follow-up. AgentSquared will push the final conversation result through the host API when it is ready.',
+      ownerFacingInstruction: 'Tell the owner only that the AgentSquared exchange was started in background mode. Do not check inbox, wait, retry, or add your own follow-up. AgentSquared will push the final conversation result through the host API when it is ready.',
       ownerFacingText: 'Sent through AgentSquared.',
       ownerFacingLines: ['Sent through AgentSquared.'],
       stdoutNoticeCode: 'OWNER_NOTIFICATION_SENT',
@@ -1558,7 +1556,7 @@ async function commandFriendMessage(args) {
     }
   } catch (error) {
     const failure = classifyOutboundFailure(error, targetAgentId)
-    if (shouldTreatOutboundFailureAsAsyncSent(failure)) {
+    if (shouldTreatOutboundFailureAsAsyncSent(failure) && currentOutboundControl.final) {
       printJson({
         ok: true,
         status: 'sent',
@@ -1605,7 +1603,7 @@ async function commandFriendMessage(args) {
     })
     const deliveredToOwner = Boolean(ownerDelivery.delivered)
     const ownerFacingText = deliveredToOwner
-      ? 'Sent through AgentSquared.'
+      ? ''
       : renderOwnerFacingReport(senderReport)
     const payload = {
       ok: false,
@@ -1621,9 +1619,9 @@ async function commandFriendMessage(args) {
       },
       ownerDelivery,
       ownerNotification: deliveredToOwner ? 'sent' : 'fallback-required',
-      ownerFacingMode: deliveredToOwner ? 'brief' : 'verbatim',
+      ownerFacingMode: deliveredToOwner ? 'suppress' : 'verbatim',
       ownerFacingInstruction: deliveredToOwner
-        ? 'Tell the owner the AgentSquared update was sent successfully. Do not retry or wait for another delivery result.'
+        ? 'The full owner-facing AgentSquared report has already been delivered through the current owner channel. Do not add any extra owner-facing reply, summary, or recap.'
         : 'Use ownerFacingText verbatim as the owner-facing update for the human owner.',
       ownerFacingText,
       ownerFacingLines: toOwnerFacingLines(ownerFacingText),
@@ -1707,15 +1705,15 @@ async function commandFriendMessage(args) {
   })
   const deliveredToOwner = Boolean(ownerDelivery.delivered)
   const ownerFacingText = deliveredToOwner
-    ? 'Sent through AgentSquared.'
+    ? ''
     : renderOwnerFacingReport(senderReport)
   const payload = {
     ok: true,
     ownerDelivery,
     ownerNotification: deliveredToOwner ? 'sent' : 'fallback-required',
-    ownerFacingMode: deliveredToOwner ? 'brief' : 'verbatim',
+    ownerFacingMode: deliveredToOwner ? 'suppress' : 'verbatim',
     ownerFacingInstruction: deliveredToOwner
-      ? 'Tell the owner the AgentSquared update was sent successfully. Do not retry or wait for another delivery result.'
+      ? 'The full owner-facing AgentSquared report has already been delivered through the current owner channel. Do not add any extra owner-facing reply, summary, or recap.'
       : 'Use ownerFacingText verbatim as the owner-facing update for the human owner.',
     ownerFacingText,
     ownerFacingLines: toOwnerFacingLines(ownerFacingText),
@@ -1794,7 +1792,7 @@ function helpText() {
     '  --host-runtime <auto|openclaw|hermes>',
     '  OpenClaw: --openclaw-agent --openclaw-command --openclaw-cwd --openclaw-gateway-url --openclaw-gateway-token --openclaw-gateway-password',
     '  Hermes: --hermes-command --hermes-home --hermes-profile --hermes-api-base',
-    '  Friend messaging: --friend-msg-wait-ms <ms> (default: 50000 for one-turn workflows; multi-turn workflows start a background worker by default)'
+    '  Friend messaging: --friend-msg-wait-ms <ms> (default: 50000 for one-turn workflows; multi-turn workflows wait in the foreground unless --background-worker true is set)'
   ].join('\n')
 }
 

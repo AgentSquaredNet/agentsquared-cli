@@ -183,7 +183,7 @@ async function main() {
       agentId: 'hermes@Jessica',
       body: {
         targetAgentId: 'claw@Skiyo',
-        skillHint: 'agent_mutual_learning',
+        skillHint: 'agent-mutual-learning',
         metadata: {
           conversationKey: 'conversation_late_test',
           sentAt: '2026-04-17T02:44:01Z',
@@ -215,7 +215,7 @@ async function main() {
       }
     })
     assert.equal(notifications.length, 1)
-    assert.equal(notifications[0].selectedSkill, 'agent_mutual_learning')
+    assert.equal(notifications[0].selectedSkill, 'agent-mutual-learning')
     assert.equal(notifications[0].ownerReport?.conversationKey, 'conversation_late_test')
     assert.equal(notifications[0].ownerReport?.final, true)
     assert.doesNotMatch(`${notifications[0].ownerReport?.message ?? ''}`, /timed out|asynchronously|wait window/i)
@@ -952,7 +952,7 @@ process.exit(2)
           }
         }
       }
-    }), 'friend_im')
+    }), 'friend-im')
     assert.equal(chooseInboundSkill({
       suggestedSkill: 'workflow_beta',
       defaultSkill: 'workflow_alpha',
@@ -2885,6 +2885,82 @@ process.exit(2)
     assert.equal(relayRetryCalls[0].reuseExistingConnection, true)
     assert.equal(relayRetryCalls[0].peerSessionId, 'peer_cached_relay_retry')
     assert.equal(relayRetryCalls[0].relayConnectTicket, '')
+
+    const noLiveReuseCalls = []
+    const noLiveReuseState = {
+      trustedSessionByConversation(conversationKey) {
+        if (conversationKey !== 'conv-no-live-reuse') {
+          return null
+        }
+        return {
+          peerSessionId: 'peer_cached_no_live',
+          conversationKey,
+          remoteAgentId: 'agent-b@owner-b',
+          remotePeerId: 'peer-remote-no-live',
+          remoteTransport: {
+            peerId: 'peer-remote-no-live',
+            streamProtocol: '/agentsquared/reuse-fallback/1.0',
+            listenAddrs: ['/ip4/127.0.0.1/tcp/40124']
+          },
+          skillHint: 'workflow-alpha'
+        }
+      },
+      touchTrustedSession() {},
+      rememberTrustedSession() {}
+    }
+    const noLiveReuseResult = await openDirectPeerSession({
+      apiBase: 'https://api.agentsquared.net',
+      agentId: 'agent-a@owner-a',
+      bundle,
+      node: {},
+      binding: {
+        streamProtocol: '/agentsquared/reuse-fallback/1.0'
+      },
+      targetAgentId: 'agent-b@owner-b',
+      skillName: 'workflow-alpha',
+      method: 'message/send',
+      message: {
+        kind: 'message',
+        role: 'user',
+        parts: [{ kind: 'text', text: 'reuse trusted session without live connection' }]
+      },
+      metadata: { conversationKey: 'conv-no-live-reuse' },
+      activitySummary: 'Trusted reuse without live connection test',
+      report: null,
+      sessionStore: noLiveReuseState,
+      _deps: {
+        currentPeerConnectionFn: () => null,
+        exchangeOverTransportFn: async ({ request, reuseExistingConnection = false }) => {
+          noLiveReuseCalls.push({
+            reuseExistingConnection,
+            peerSessionId: request?.params?.metadata?.peerSessionId,
+            relayConnectTicket: request?.params?.metadata?.relayConnectTicket ?? ''
+          })
+          return {
+            jsonrpc: '2.0',
+            id: request.id,
+            result: {
+              message: {
+                kind: 'message',
+                role: 'agent',
+                parts: [{ kind: 'text', text: 'trusted-no-live-ok' }]
+              }
+            }
+          }
+        },
+        currentTransportFn: async () => {
+          throw new Error('should not create a fresh relay ticket when a trusted conversation session is reusable')
+        },
+        createConnectTicketWithRecoveryFn: async () => {
+          throw new Error('should not create a fresh relay ticket when a trusted conversation session is reusable')
+        }
+      }
+    })
+    assert.equal(noLiveReuseCalls.length, 1)
+    assert.equal(noLiveReuseCalls[0].reuseExistingConnection, false)
+    assert.equal(noLiveReuseCalls[0].peerSessionId, 'peer_cached_no_live')
+    assert.equal(noLiveReuseCalls[0].relayConnectTicket, '')
+    assert.equal(peerResponseText(noLiveReuseResult.response), 'trusted-no-live-ok')
 
     const transport = requireListeningTransport(responder, {
       binding: 'libp2p-a2a-jsonrpc',

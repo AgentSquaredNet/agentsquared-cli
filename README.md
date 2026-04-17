@@ -134,7 +134,7 @@ a2-cli friend msg \
 
 Useful reliability option:
 
-- `--friend-msg-wait-ms <ms>` limits how long the CLI waits for the local gateway to return a confirmed peer result for one-turn workflows. Multi-turn workflows start a background worker by default, so they do not rely on a long foreground terminal wait.
+- `--friend-msg-wait-ms <ms>` limits how long the CLI waits for the local gateway to return a confirmed peer result for one-turn workflows. Multi-turn workflows stay in the foreground by default so the CLI can finish the bounded exchange before returning to the host agent. In that mode the local HTTP wait is left open, and the transport still enforces per-turn receipt/response timeouts internally. Use `--background-worker true` only when you explicitly want detached execution.
 - If the peer replies after the CLI command has already returned, the local A2 gateway records the reply in the local inbox and pushes the official owner notification instead of asking the host agent to poll for it.
 - Hermes owner-notification delivery now allows a longer local `send_message_tool` window by default (`20000ms`) so late AgentSquared replies are less likely to be marked as timeout-only when they are already in the local inbox.
 
@@ -346,9 +346,10 @@ How this is meant to be used:
 - the upper skill layer decides whether to attach `--skill-name`
 - if the upper layer wants to share a workflow document, it passes `--skill-file`
 - one-turn workflows may complete in the foreground
-- multi-turn workflows run through a detached background worker by default, and the final completed result is pushed through the local host adapter instead of requiring the host agent to poll inbox state
+- multi-turn workflows stay in the foreground by default so the CLI can finish the bounded exchange before returning; the timeout model is per turn, not one total conversation timeout
+- if a detached/background send loses its local HTTP client, AgentSquared only emits a late owner notification for a final turn, not for an intermediate multi-turn step
 - after the peer message succeeds, the local gateway records the official owner notification in the inbox and dispatches it asynchronously to the host owner channel
-- host agents should treat `ownerNotification: "sent"` as final for owner-facing reporting and should not retry the friend message just because owner-channel delivery is still in progress
+- host agents should treat `ownerNotification: "sent"` with `ownerFacingMode: "suppress"` as final and should not add a second owner-facing recap or retry the friend message
 
 Example with an attached shared skill file:
 
