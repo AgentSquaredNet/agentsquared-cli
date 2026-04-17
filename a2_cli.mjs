@@ -52,6 +52,30 @@ function clean(value) {
   return `${value ?? ''}`.trim()
 }
 
+function redactForOutput(value, seen = new WeakSet()) {
+  if (!value || typeof value !== 'object') {
+    return value
+  }
+  if (seen.has(value)) {
+    return '[Circular]'
+  }
+  seen.add(value)
+  if (Array.isArray(value)) {
+    return value.map((item) => redactForOutput(item, seen))
+  }
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+    const normalizedKey = clean(key).toLowerCase()
+    if (
+      normalizedKey === 'envvars'
+      || normalizedKey === 'config'
+      || /secret|password|token|api[_-]?key/.test(normalizedKey)
+    ) {
+      return [key, item ? '[redacted]' : item]
+    }
+    return [key, redactForOutput(item, seen)]
+  }))
+}
+
 function stableDedupeKey(parts = []) {
   return crypto
     .createHash('sha256')
@@ -91,7 +115,7 @@ function parseJwtPayloadUnverified(token) {
 }
 
 function printJson(payload) {
-  console.log(JSON.stringify(payload, null, 2))
+  console.log(JSON.stringify(redactForOutput(payload), null, 2))
 }
 
 function toOwnerFacingLines(text = '') {
