@@ -30,7 +30,7 @@ import { buildStandardRuntimeOwnerLines, buildStandardRuntimeReport } from './li
 import { chooseInboundSkill, resolveMailboxKey } from './lib/routing/agent_router.mjs'
 import { createLocalRuntimeExecutor } from './lib/runtime/executor.mjs'
 import { createLiveConversationStore } from './lib/conversation/store.mjs'
-import { normalizeConversationControl, parseSkillDocumentPolicy, resolveSkillMaxTurns, shouldContinueConversation } from './lib/conversation/policy.mjs'
+import { normalizeConversationControl, parseSkillDocumentPolicy, resolveConversationMaxTurns, shouldContinueConversation } from './lib/conversation/policy.mjs'
 import {
   assertNoExistingLocalActivation,
   buildGatewayArgs,
@@ -420,6 +420,9 @@ function loadSharedSkillFile(skillFile) {
     path: resolved,
     name: policy.name,
     maxTurns: policy.maxTurns,
+    conversationPolicy: {
+      maxTurns: policy.maxTurns
+    },
     document: clean(text).slice(0, 16000)
   }
 }
@@ -462,10 +465,13 @@ function extractPeerResponseMetadata(response = null) {
     : {}
 }
 
-function resolveConversationPolicy(skillName = '', sharedSkill = null) {
+function resolveOutboundConversationPolicy(sharedSkill = null) {
   return {
-    skillName: clean(skillName),
-    maxTurns: resolveSkillMaxTurns(skillName, sharedSkill)
+    maxTurns: resolveConversationMaxTurns({
+      conversationPolicy: sharedSkill?.conversationPolicy ?? { maxTurns: sharedSkill?.maxTurns },
+      sharedSkill,
+      fallback: 1
+    })
   }
 }
 
@@ -1386,7 +1392,7 @@ async function commandFriendMessage(args) {
     source: explicitSkillName ? 'explicit' : sharedSkill?.name ? 'shared-skill' : 'none',
     reason: explicitSkillName ? 'explicit-skill-arg' : sharedSkill?.name ? 'shared-skill-file' : 'no-skill-hint'
   }
-  const conversationPolicy = resolveConversationPolicy(skillHint, sharedSkill)
+  const conversationPolicy = resolveOutboundConversationPolicy(sharedSkill)
   const runInBackground = isTrueFlag(args['background-worker'])
 
   if (runInBackground) {
@@ -1455,6 +1461,7 @@ async function commandFriendMessage(args) {
           },
           metadata: {
             ...(sharedSkill ? { sharedSkill } : {}),
+            conversationPolicy,
             originalOwnerText: turnIndex === 1 ? text : currentOutboundText,
             conversationKey,
             sentAt,

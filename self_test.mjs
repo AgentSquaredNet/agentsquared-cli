@@ -24,7 +24,7 @@ import { chooseInboundSkill, createAgentRouter, createMailboxScheduler } from '.
 import { createLiveConversationStore } from './lib/conversation/store.mjs'
 import { createLocalRuntimeExecutor, createOwnerNotifier } from './lib/runtime/executor.mjs'
 import { buildSenderBaseReport, buildSenderFailureReport, buildReceiverBaseReport, buildSkillOutboundText, parseAgentSquaredOutboundEnvelope, peerResponseText, renderOwnerFacingReport } from './lib/conversation/templates.mjs'
-import { PLATFORM_MAX_TURNS, normalizeConversationControl, parseSkillDocumentPolicy, resolveSkillMaxTurns, shouldContinueConversation } from './lib/conversation/policy.mjs'
+import { normalizeConversationControl, parseSkillDocumentPolicy, resolveConversationMaxTurns, shouldContinueConversation } from './lib/conversation/policy.mjs'
 import { detectHostRuntimeEnvironment, parseOpenClawTaskResult } from './adapters/index.mjs'
 import { buildOpenClawSafetyPrompt, buildOpenClawTaskPrompt } from './adapters/openclaw/adapter.mjs'
 import { detectOpenClawHostEnvironment, resolveOpenClawAgentSelection } from './adapters/openclaw/detect.mjs'
@@ -913,6 +913,9 @@ process.exit(2)
               turnIndex: 3,
               decision: 'continue',
               final: false,
+              conversationPolicy: {
+                maxTurns: 8
+              },
               sharedSkill: {
                 name: 'workflow_beta',
                 maxTurns: 8,
@@ -952,7 +955,7 @@ process.exit(2)
           }
         }
       }
-    }), 'friend-im')
+    }), '')
     assert.equal(chooseInboundSkill({
       suggestedSkill: 'workflow_beta',
       defaultSkill: 'workflow_alpha',
@@ -1269,17 +1272,30 @@ process.exit(2)
     assert.equal(parsedEscapedOpenClaw.peerResponse.metadata.stopReason, 'completed')
     assert.equal(parsedEscapedOpenClaw.peerResponse.metadata.final, true)
     assert.equal(shouldContinueConversation(parsedOpenClaw.peerResponse.metadata), true)
-    assert.equal(resolveSkillMaxTurns('workflow_alpha'), 1)
-    assert.equal(resolveSkillMaxTurns('workflow_beta', { name: 'workflow_beta', maxTurns: 99 }), PLATFORM_MAX_TURNS)
-    assert.equal(resolveSkillMaxTurns('friend-im'), 1)
-    assert.equal(resolveSkillMaxTurns('agent-mutual-learning'), 8)
+    assert.equal(resolveConversationMaxTurns(), 1)
+    assert.equal(resolveConversationMaxTurns({
+      conversationPolicy: { maxTurns: 8 },
+      sharedSkill: { name: 'any-workflow', maxTurns: 8 }
+    }), 8)
+    assert.equal(resolveConversationMaxTurns({
+      conversationPolicy: { maxTurns: 8 },
+      sharedSkill: { name: 'any-workflow', maxTurns: 7 }
+    }), 1)
+    assert.equal(resolveConversationMaxTurns({
+      conversationPolicy: { maxTurns: 99 },
+      sharedSkill: { name: 'any-workflow', maxTurns: 99 }
+    }), 1)
     assert.deepEqual(
       parseSkillDocumentPolicy('---\nname: workflow_beta\nmaxTurns: 8\n---\nbody'),
       { name: 'workflow_beta', maxTurns: 8 }
     )
     assert.deepEqual(
       parseSkillDocumentPolicy('---\nname: agent-mutual-learning\n---\nbody'),
-      { name: 'agent-mutual-learning', maxTurns: 8 }
+      { name: 'agent-mutual-learning', maxTurns: 1 }
+    )
+    assert.deepEqual(
+      parseSkillDocumentPolicy('---\nname: too-long\nmaxTurns: 99\n---\nbody'),
+      { name: 'too-long', maxTurns: 1 }
     )
     assert.deepEqual(
       normalizeConversationControl({}, {

@@ -1,6 +1,6 @@
 import { withOpenClawGatewayClient } from './ws_client.mjs'
 import { buildReceiverBaseReport, inferOwnerFacingLanguage, parseAgentSquaredOutboundEnvelope } from '../../lib/conversation/templates.mjs'
-import { normalizeConversationControl, resolveInboundConversationIdentity, resolveSkillMaxTurns } from '../../lib/conversation/policy.mjs'
+import { normalizeConversationControl, resolveConversationMaxTurns, resolveInboundConversationIdentity } from '../../lib/conversation/policy.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import {
   buildOpenClawSafetyPrompt,
@@ -493,7 +493,11 @@ export function createOpenClawAdapter({
       }) ?? null
       const conversationTranscript = conversationStore?.transcript?.(liveConversation?.conversationKey || conversationKey) ?? ''
       const relationshipSummary = await readRelationshipSummary(client, relationSessionKey)
-      const localSkillMaxTurns = resolveSkillMaxTurns(selectedSkill, metadata?.sharedSkill ?? null)
+      const localSkillMaxTurns = resolveConversationMaxTurns({
+        conversationPolicy: metadata?.conversationPolicy ?? null,
+        sharedSkill: metadata?.sharedSkill ?? null,
+        fallback: 1
+      })
       const defaultShouldContinue = !inboundConversation.final
         && inboundConversation.turnIndex < localSkillMaxTurns
       const sessionKey = stableId(

@@ -345,6 +345,8 @@ How this is meant to be used:
 - the CLI handles the lower transport and messaging flow
 - the upper skill layer decides whether to attach `--skill-name`
 - if the upper layer wants to share a workflow document, it passes `--skill-file`
+- workflow-specific policy lives in the shared skill file, not in CLI; CLI reads `maxTurns` from the skill frontmatter and carries it as generic `conversationPolicy.maxTurns`
+- CLI enforces the platform hard cap of 20 turns; if the sender policy and shared skill policy are missing, invalid, or mismatched, the exchange safely falls back to one turn
 - one-turn workflows may complete in the foreground
 - multi-turn workflows stay in the foreground by default so the CLI can finish the bounded exchange before returning; the timeout model is per turn, not one total conversation timeout
 - if a detached/background send loses its local HTTP client, AgentSquared only emits a late owner notification for a final turn, not for an intermediate multi-turn step

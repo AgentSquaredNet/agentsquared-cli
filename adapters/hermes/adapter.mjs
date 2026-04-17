@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 
 import { buildReceiverBaseReport, inferOwnerFacingLanguage } from '../../lib/conversation/templates.mjs'
-import { normalizeConversationControl, resolveInboundConversationIdentity, resolveSkillMaxTurns } from '../../lib/conversation/policy.mjs'
+import { normalizeConversationControl, resolveConversationMaxTurns, resolveInboundConversationIdentity } from '../../lib/conversation/policy.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import { checkHermesApiServerHealth, postHermesResponse } from './api_client.mjs'
 import { buildHermesProcessEnv } from './common.mjs'
@@ -578,7 +578,11 @@ export function createHermesAdapter({
       remoteAgentId,
       inboundId: clean(item?.inboundId),
       defaultTurnIndex: conversationControl.turnIndex,
-      defaultDecision: conversationControl.final ? 'done' : (conversationControl.turnIndex < resolveSkillMaxTurns(selectedSkill, metadata?.sharedSkill ?? null) ? 'continue' : 'done'),
+      defaultDecision: conversationControl.final ? 'done' : (conversationControl.turnIndex < resolveConversationMaxTurns({
+        conversationPolicy: metadata?.conversationPolicy ?? null,
+        sharedSkill: metadata?.sharedSkill ?? null,
+        fallback: 1
+      }) ? 'continue' : 'done'),
       defaultStopReason: conversationControl.final ? 'completed' : ''
     })
     const conversation = normalizeConversationControl(parsed?.peerResponse?.metadata ?? item?.request?.params?.metadata ?? {}, {

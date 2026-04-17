@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 
 import { parseAgentSquaredOutboundEnvelope, renderOwnerFacingReport } from '../../lib/conversation/templates.mjs'
-import { PLATFORM_MAX_TURNS, normalizeConversationControl, resolveSkillMaxTurns } from '../../lib/conversation/policy.mjs'
+import { PLATFORM_MAX_TURNS, normalizeConversationControl, resolveConversationMaxTurns } from '../../lib/conversation/policy.mjs'
 
 function clean(value) {
   return `${value ?? ''}`.trim()
@@ -466,7 +466,11 @@ export function buildOpenClawTaskPrompt({
   const sharedSkillName = clean(metadata?.sharedSkill?.name || metadata?.skillFileName)
   const sharedSkillPath = clean(metadata?.sharedSkill?.path || metadata?.skillFilePath)
   const sharedSkillDocument = clean(metadata?.sharedSkill?.document || metadata?.skillDocument)
-  const localSkillMaxTurns = resolveSkillMaxTurns(selectedSkill, metadata?.sharedSkill ?? null)
+  const localSkillMaxTurns = resolveConversationMaxTurns({
+    conversationPolicy: metadata?.conversationPolicy ?? null,
+    sharedSkill: metadata?.sharedSkill ?? null,
+    fallback: 1
+  })
   const defaultShouldContinue = !conversation.final
     && conversation.turnIndex < localSkillMaxTurns
 
