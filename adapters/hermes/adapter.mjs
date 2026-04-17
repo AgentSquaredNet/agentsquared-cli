@@ -184,7 +184,7 @@ function sendHermesOwnerMessage({
   hermesHome = '',
   target = '',
   message = '',
-  timeoutMs = Number.parseInt(process.env.A2_HERMES_OWNER_REPORT_TIMEOUT_MS ?? '4000', 10) || 4000
+  timeoutMs = Number.parseInt(process.env.A2_HERMES_OWNER_REPORT_TIMEOUT_MS ?? '20000', 10) || 20000
 } = {}) {
   const resolvedTarget = clean(target)
   const resolvedMessage = clean(message)
