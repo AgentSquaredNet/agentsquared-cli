@@ -458,13 +458,15 @@ export function buildOpenClawTaskPrompt({
   const requestId = clean(item?.request?.id)
   const metadata = item?.request?.params?.metadata ?? {}
   const parsedEnvelope = parseAgentSquaredOutboundEnvelope(rawInboundText)
-  const displayInboundText = clean(metadata?.originalOwnerText) || clean(parsedEnvelope?.ownerRequest) || rawInboundText
-  const originalOwnerGoal = clean(metadata?.originalOwnerText)
   const conversation = normalizeConversationControl(metadata, {
     defaultTurnIndex: 1,
     defaultDecision: 'done',
     defaultStopReason: ''
   })
+  const displayInboundText = conversation.turnIndex > 1
+    ? rawInboundText
+    : (clean(metadata?.originalOwnerText) || clean(parsedEnvelope?.ownerRequest) || rawInboundText)
+  const originalOwnerGoal = clean(metadata?.originalOwnerText)
   const sharedSkillName = clean(metadata?.sharedSkill?.name || metadata?.skillFileName)
   const sharedSkillPath = clean(metadata?.sharedSkill?.path || metadata?.skillFilePath)
   const sharedSkillDocument = clean(metadata?.sharedSkill?.document || metadata?.skillDocument)

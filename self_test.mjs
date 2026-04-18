@@ -31,6 +31,7 @@ import { buildOpenClawSafetyPrompt, buildOpenClawTaskPrompt } from './adapters/o
 import { detectOpenClawHostEnvironment, resolveOpenClawAgentSelection } from './adapters/openclaw/detect.mjs'
 import { withOpenClawGatewayClient } from './adapters/openclaw/ws_client.mjs'
 import { readHermesEnv } from './adapters/hermes/env.mjs'
+import { buildHermesTaskPrompt, parseHermesTaskResult } from './adapters/hermes/helpers.mjs'
 import { runA2Cli } from './a2_cli.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -211,6 +212,92 @@ async function main() {
     assert.equal(receivedPath, '/connect-jobs')
     assert.equal(response.status, 'accepted')
     await new Promise((resolve) => jobServer.close(resolve))
+  }
+
+  {
+    const prompt = buildHermesTaskPrompt({
+      localAgentId: 'hermes@owner',
+      remoteAgentId: 'peer@owner',
+      selectedSkill: 'workflow_alpha',
+      item: {
+        request: {
+          id: 'req-1',
+          method: 'message/send',
+          params: {
+            message: { parts: [{ text: 'learn my skills' }] },
+            metadata: {
+              conversationKey: 'conversation_prompt_test',
+              turnIndex: 2,
+              decision: 'continue',
+              originalOwnerText: 'original owner goal should not replace live peer turns',
+              sharedSkill: {
+                name: 'workflow_alpha',
+                maxTurns: 8,
+                document: [
+                  '---',
+                  'name: workflow_alpha',
+                  'maxTurns: 8',
+                  '---',
+                  '# Workflow Alpha',
+                  '## Dependency Check',
+                  '- run `a2-cli help`',
+                  '- run `npm install -g @agentsquared/cli@latest`',
+                  '## Rules',
+                  '- compare concrete workflows',
+                  '- ask one focused follow-up question'
+                ].join('\n')
+              },
+              conversationPolicy: { maxTurns: 8 }
+            }
+          }
+        }
+      }
+    })
+    assert.match(prompt, /Do not call tools/)
+    assert.match(prompt, /sharedWorkflowBehaviorOnly/)
+    assert.doesNotMatch(prompt, /a2-cli help/)
+    assert.doesNotMatch(prompt, /npm install/)
+    assert.match(prompt, /compare concrete workflows/)
+    assert.match(prompt, /Owner-visible inbound request:\nlearn my skills/)
+    assert.doesNotMatch(prompt, /Owner-visible inbound request:\noriginal owner goal/)
+  }
+
+  {
+    const parsed = parseHermesTaskResult({
+      output: [
+        {
+          type: 'function_call',
+          name: 'terminal',
+          arguments: '{"command":"a2-cli friend msg ..."}',
+          call_id: 'call-1'
+        },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{
+            type: 'output_text',
+            text: JSON.stringify({
+              selectedSkill: 'workflow_alpha',
+              peerResponse: '',
+              ownerReport: 'Hermes tried to start another AgentSquared exchange.',
+              turnIndex: 2,
+              decision: 'done',
+              stopReason: 'system-error'
+            })
+          }]
+        }
+      ]
+    }, {
+      defaultSkill: 'workflow_alpha',
+      remoteAgentId: 'peer@owner',
+      inboundId: 'req-2',
+      defaultTurnIndex: 2,
+      defaultDecision: 'continue'
+    })
+    assert.equal(parsed.peerResponse.metadata.stopReason, 'system-error')
+    assert.equal(parsed.peerResponse.metadata.final, true)
+    assert.match(parsed.ownerReport.summary, /terminal/)
+    assert.match(parsed.peerResponse.message.parts[0].text, /pause this AgentSquared exchange/)
   }
 
   {
@@ -953,6 +1040,7 @@ process.exit(2)
               turnIndex: 3,
               decision: 'continue',
               final: false,
+              originalOwnerText: 'original owner goal should not replace live peer turns',
               conversationPolicy: {
                 maxTurns: 8
               },
@@ -971,6 +1059,8 @@ process.exit(2)
     assert.match(taskPrompt, /platformMaxTurns: 20/)
     assert.match(taskPrompt, /localSkillMaxTurns: 8/)
     assert.match(taskPrompt, /sharedSkillName: workflow_beta/)
+    assert.match(taskPrompt, /messageText: From now on we are friends/)
+    assert.doesNotMatch(taskPrompt, /messageText: original owner goal/)
 
     assert.equal(chooseInboundSkill({
       suggestedSkill: '',
@@ -1145,9 +1235,7 @@ process.exit(2)
         }
       }
     })
-    assert.equal(continuedOwnerReports.length, 1)
-    assert.equal(continuedOwnerReports[0].conversation.final, false)
-    assert.equal(continuedOwnerReports[0].conversation.decision, 'continue')
+    assert.equal(continuedOwnerReports.length, 0)
 
     const fallbackResponded = []
     const fallbackRejected = []

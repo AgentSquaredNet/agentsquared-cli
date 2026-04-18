@@ -13,6 +13,7 @@ import {
   buildHermesSafetyPrompt,
   buildHermesTaskPrompt,
   hermesConversationName,
+  HERMES_STRUCTURED_NO_TOOLS_INSTRUCTIONS,
   ownerReportText,
   parseHermesSafetyResult,
   parseHermesTaskResult
@@ -378,14 +379,21 @@ export function createHermesAdapter({
     const receivedAt = new Date().toISOString()
     const inboundText = clean(item?.request?.params?.message?.parts?.[0]?.text || item?.request?.params?.message?.text || '')
     const inboundMetadata = item?.request?.params?.metadata ?? {}
-    const ownerLanguage = inferOwnerFacingLanguage(inboundMetadata.originalOwnerText || inboundText, inboundText)
+    const inboundConversation = normalizeConversationControl(inboundMetadata, {
+      defaultTurnIndex: 1,
+      defaultDecision: 'done',
+      defaultStopReason: ''
+    })
+    const displayInboundText = inboundConversation.turnIndex > 1
+      ? inboundText
+      : (clean(inboundMetadata.originalOwnerText) || inboundText)
+    const ownerLanguage = inferOwnerFacingLanguage(displayInboundText, inboundText)
     const ownerTimeZone = localOwnerTimeZone()
     const conversationIdentity = resolveInboundConversationIdentity(item)
     const conversationKey = clean(conversationIdentity.conversationKey)
     const detection = await detectCurrent()
     const envVars = detection.envVars || ensureHermesApiServerEnv(detection.hermesHome).envVars
     const budget = consumePeerBudget({ remoteAgentId })
-    const displayInboundText = clean(inboundMetadata.originalOwnerText) || inboundText
 
     if (budget.overBudget) {
       const peerReplyText = 'I am pausing this AgentSquared request because this peer has reached the recent conversation window limit. My owner can decide whether to continue later.'
@@ -461,7 +469,10 @@ export function createHermesAdapter({
     const safetyPayload = await postHermesResponse({
       apiBase: detection.apiBase,
       envVars,
+      hermesHome: detection.hermesHome,
       timeoutMs,
+      instructions: HERMES_STRUCTURED_NO_TOOLS_INSTRUCTIONS,
+      noTools: true,
       conversation: hermesConversationName('agentsquared:safety', localAgentId, remoteAgentId || mailboxKey || 'unknown'),
       input: buildHermesSafetyPrompt({
         localAgentId,
@@ -566,7 +577,10 @@ export function createHermesAdapter({
     const taskPayload = await postHermesResponse({
       apiBase: detection.apiBase,
       envVars,
+      hermesHome: detection.hermesHome,
       timeoutMs,
+      instructions: HERMES_STRUCTURED_NO_TOOLS_INSTRUCTIONS,
+      noTools: true,
       conversation: hermesConversationName('agentsquared:work', localAgentId, remoteAgentId, conversationKey, `${conversationControl.turnIndex}`),
       input: buildHermesTaskPrompt({
         localAgentId,

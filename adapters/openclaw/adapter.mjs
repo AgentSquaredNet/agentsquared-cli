@@ -273,7 +273,14 @@ export function createOpenClawAdapter({
     const inboundText = peerResponseText(item?.request?.params?.message)
     const inboundMetadata = item?.request?.params?.metadata ?? {}
     const parsedEnvelope = parseAgentSquaredOutboundEnvelope(inboundText)
-    const displayInboundText = clean(inboundMetadata.originalOwnerText) || clean(parsedEnvelope?.ownerRequest) || inboundText
+    const inboundConversation = normalizeConversationControl(inboundMetadata, {
+      defaultTurnIndex: 1,
+      defaultDecision: 'done',
+      defaultStopReason: ''
+    })
+    const displayInboundText = inboundConversation.turnIndex > 1
+      ? inboundText
+      : (clean(inboundMetadata.originalOwnerText) || clean(parsedEnvelope?.ownerRequest) || inboundText)
     const remoteSentAt = clean(inboundMetadata.sentAt) || clean(parsedEnvelope?.sentAt)
     const ownerLanguage = inferOwnerFacingLanguage(displayInboundText, inboundText)
     const ownerTimeZone = localOwnerTimeZone()
