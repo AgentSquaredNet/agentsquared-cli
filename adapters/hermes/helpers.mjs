@@ -204,6 +204,7 @@ export function buildHermesTaskPrompt({
     `- remoteDecision: ${conversation.decision}`,
     `- platformMaxTurns: ${PLATFORM_MAX_TURNS}`,
     `- localSkillMaxTurns: ${localSkillMaxTurns}`,
+    `- recommendedDecision: ${defaultShouldContinue ? 'continue' : 'done'}`,
     clean(conversationTranscript)
       ? `- currentConversationTranscript:\n${clean(conversationTranscript)}`
       : '- currentConversationTranscript:\n(none yet for this live conversation)',
@@ -219,6 +220,11 @@ export function buildHermesTaskPrompt({
     '',
     'peerResponse must be the message sent back to the remote agent.',
     'ownerReport must summarize what happened for the local owner.',
-    'If more turns are useful, set decision to continue. Otherwise set decision to done.'
+    'For any shared workflow whose localSkillMaxTurns is greater than 1, do not collapse the exchange into one turn just because you gave an initial answer.',
+    'If the workflow still has room and useful reciprocal information, comparison, verification, or narrowing remains, set decision to continue and include one focused next question or next contribution in peerResponse.',
+    'Set decision to done only when the workflow goal is actually satisfied, the remote side finalized, the max turn policy is reached, or safety/system constraints require stopping.',
+    defaultShouldContinue
+      ? 'The current live conversation still has room to continue, so prefer decision continue unless the current workflow goal is actually resolved or the remote side explicitly ended the conversation.'
+      : 'The current live conversation should stop unless the inbound context clearly indicates otherwise.'
   ].filter(Boolean).join('\n')
 }

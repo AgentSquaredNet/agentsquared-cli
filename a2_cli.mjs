@@ -816,7 +816,7 @@ function sleep(ms) {
 
 function classifyOutboundFailure(error = '', targetAgentId = '') {
   const failureKind = clean(typeof error === 'object' && error != null ? error.a2FailureKind : '')
-  const message = clean(typeof error === 'object' && error != null ? error.message : error)
+  const message = describeErrorForOutput(error)
   const lower = message.toLowerCase()
   if (failureKind === 'post-dispatch-empty-response') {
     return {
@@ -918,7 +918,7 @@ function classifyOutboundFailure(error = '', targetAgentId = '') {
       nextStep: 'Do not switch to another target automatically. Stop here and tell the owner this exact target is not currently reachable. The owner can retry the same target later.'
     }
   }
-  if (lower.includes('gateway transport is unavailable') || lower.includes('recovering') || lower.includes('429') || lower.includes('too many requests') || lower.includes('relay')) {
+  if (lower.includes('gateway transport is unavailable') || lower.includes('recovering') || lower.includes('429') || lower.includes('too many requests') || lower.includes('relay') || lower.includes('fetch failed')) {
     return {
       code: 'relay-or-gateway-unavailable',
       deliveryStatus: 'failed',
@@ -950,11 +950,46 @@ function shouldTreatOutboundFailureAsAsyncSent(failure = null) {
 }
 
 function extractFailureDetail(error = null) {
-  const raw = clean(typeof error === 'object' && error != null ? error.message : error)
+  const raw = describeErrorForOutput(error)
   if (!raw) {
     return ''
   }
   return raw.replace(/^delivery status is unknown after the request was dispatched:\s*/i, '').trim()
+}
+
+function describeErrorForOutput(error = null, seen = new Set()) {
+  if (error == null) {
+    return ''
+  }
+  if (typeof error !== 'object') {
+    return clean(error)
+  }
+  if (seen.has(error)) {
+    return ''
+  }
+  seen.add(error)
+  const parts = []
+  const message = clean(error.message)
+  if (message) {
+    parts.push(message)
+  }
+  const code = clean(error.code)
+  if (code && !parts.some((part) => part.includes(code))) {
+    parts.push(code)
+  }
+  const cause = describeErrorForOutput(error.cause, seen)
+  if (cause) {
+    parts.push(`cause: ${cause}`)
+  }
+  if (Array.isArray(error.errors)) {
+    for (const nested of error.errors) {
+      const detail = describeErrorForOutput(nested, seen)
+      if (detail) {
+        parts.push(`nested: ${detail}`)
+      }
+    }
+  }
+  return [...new Set(parts)].join('; ')
 }
 
 

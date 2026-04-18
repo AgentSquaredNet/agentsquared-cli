@@ -2602,34 +2602,29 @@ process.exit(2)
       },
       skillHint: 'workflow_alpha'
     })
-    await assert.rejects(
-      () => openDirectPeerSession({
-        apiBase: 'https://api.agentsquared.net',
-        agentId: 'agent-a@owner-a',
-        bundle,
-        node: initiator,
-        binding: {
-          streamProtocol: '/agentsquared/reuse-empty-retry/1.0'
-        },
-        targetAgentId: 'agent-b@owner-b',
-        skillName: 'workflow_alpha',
-        method: 'message/send',
-        message: {
-          kind: 'message',
-          role: 'user',
-          parts: [{ kind: 'text', text: 'retry empty please' }]
-        },
-        metadata: { conversationKey: 'conv-empty-retry' },
-        activitySummary: 'Retry empty response test',
-        report: null,
-        sessionStore: retryOnEmptyState
-      }),
-      (error) => {
-        assert.match(`${error?.message ?? ''}`, /delivery status is unknown after the request was dispatched/i)
-        return true
-      }
-    )
+    const retryOnEmptyResult = await openDirectPeerSession({
+      apiBase: 'https://api.agentsquared.net',
+      agentId: 'agent-a@owner-a',
+      bundle,
+      node: initiator,
+      binding: {
+        streamProtocol: '/agentsquared/reuse-empty-retry/1.0'
+      },
+      targetAgentId: 'agent-b@owner-b',
+      skillName: 'workflow_alpha',
+      method: 'message/send',
+      message: {
+        kind: 'message',
+        role: 'user',
+        parts: [{ kind: 'text', text: 'retry empty please' }]
+      },
+      metadata: { conversationKey: 'conv-empty-retry' },
+      activitySummary: 'Retry empty response test',
+      report: null,
+      sessionStore: retryOnEmptyState
+    })
     assert.equal(retryOnEmptyAttempts, 1)
+    assert.equal(peerResponseText(retryOnEmptyResult.response), 'retried-ok')
     const duplicatePendingState = createGatewayRuntimeState({ inboundTimeoutMs: 1000, peerSessionTTLms: 1000 })
     const duplicatePendingFirst = await duplicatePendingState.enqueueInbound({
       request: { id: 'req-duplicate-pending', params: { metadata: {} } },
@@ -2702,7 +2697,7 @@ process.exit(2)
       }),
       /delivery status is unknown after the request was dispatched/i
     )
-    assert.equal(ambiguousAttempt, 1)
+    assert.equal(ambiguousAttempt, 2)
 
     {
       let postDispatchEmptyReadCount = 0
@@ -2944,6 +2939,77 @@ process.exit(2)
     assert.ok(relayRetryCalls[1].relayConnectTicket)
     assert.equal(peerResponseText(relayRetryResult.response), 'relay-retry-ok')
 
+    const fetchRetryCalls = []
+    const fetchRetryResult = await openDirectPeerSession({
+      apiBase: 'https://api.agentsquared.net',
+      agentId: 'agent-a@owner-a',
+      bundle,
+      node: {},
+      binding: {
+        streamProtocol: '/agentsquared/reuse-fallback/1.0'
+      },
+      targetAgentId: 'agent-b@owner-b',
+      skillName: 'workflow-alpha',
+      method: 'message/send',
+      message: {
+        kind: 'message',
+        role: 'user',
+        parts: [{ kind: 'text', text: 'reuse fallback after fetch failed' }]
+      },
+      metadata: { conversationKey: 'conv-relay-retry' },
+      activitySummary: 'Trusted reuse fetch-failed fallback test',
+      report: null,
+      sessionStore: relayRetryState,
+      _deps: {
+        currentPeerConnectionFn: () => ({}),
+        exchangeOverTransportFn: async ({ request, reuseExistingConnection = false }) => {
+          fetchRetryCalls.push({
+            reuseExistingConnection,
+            relayConnectTicket: request?.params?.metadata?.relayConnectTicket ?? ''
+          })
+          if (fetchRetryCalls.length === 1) {
+            const cause = Object.assign(new Error('connect ENETUNREACH 240d:c000:f07f:6100:30d0:39b6:166e:0:4051'), { code: 'ENETUNREACH' })
+            const error = new Error('fetch failed', { cause })
+            error.a2DispatchStage = 'pre-dispatch'
+            throw error
+          }
+          return {
+            jsonrpc: '2.0',
+            id: request.id,
+            result: {
+              message: {
+                kind: 'message',
+                role: 'agent',
+                parts: [{ kind: 'text', text: 'fetch-retry-ok' }]
+              }
+            }
+          }
+        },
+        currentTransportFn: async () => ({
+          peerId: 'peer-local',
+          streamProtocol: '/agentsquared/reuse-fallback/1.0',
+          listenAddrs: [],
+          relayAddrs: ['/dns4/relay.agentsquared.net/tcp/4051/p2p/peer-remote/p2p-circuit'],
+          supportedBindings: ['libp2p-a2a-jsonrpc'],
+          a2aProtocolVersion: 'a2a-jsonrpc-custom-binding/2026-03'
+        }),
+        createConnectTicketWithRecoveryFn: async () => ({
+          ticket: { ticket: relayRetryTicket },
+          targetTransport: {
+            peerId: 'peer-remote',
+            streamProtocol: '/agentsquared/reuse-fallback/1.0',
+            listenAddrs: ['/ip4/127.0.0.1/tcp/40125']
+          }
+        })
+      }
+    })
+    assert.equal(fetchRetryCalls.length, 2)
+    assert.equal(fetchRetryCalls[0].reuseExistingConnection, true)
+    assert.equal(fetchRetryCalls[0].relayConnectTicket, '')
+    assert.equal(fetchRetryCalls[1].reuseExistingConnection, false)
+    assert.ok(fetchRetryCalls[1].relayConnectTicket)
+    assert.equal(peerResponseText(fetchRetryResult.response), 'fetch-retry-ok')
+
     const relayRetryFailCalls = []
     await assert.rejects(
       () => openDirectPeerSession({
@@ -3004,8 +3070,8 @@ process.exit(2)
     )
     assert.equal(relayRetryFailCalls.length, 2)
 
-    const noLiveReuseCalls = []
-    const noLiveReuseState = {
+    const noLiveFreshTicketCalls = []
+    const noLiveFreshTicketState = {
       trustedSessionByConversation(conversationKey) {
         if (conversationKey !== 'conv-no-live-reuse') {
           return null
@@ -3026,7 +3092,7 @@ process.exit(2)
       touchTrustedSession() {},
       rememberTrustedSession() {}
     }
-    const noLiveReuseResult = await openDirectPeerSession({
+    const noLiveFreshTicketResult = await openDirectPeerSession({
       apiBase: 'https://api.agentsquared.net',
       agentId: 'agent-a@owner-a',
       bundle,
@@ -3043,13 +3109,13 @@ process.exit(2)
         parts: [{ kind: 'text', text: 'reuse trusted session without live connection' }]
       },
       metadata: { conversationKey: 'conv-no-live-reuse' },
-      activitySummary: 'Trusted reuse without live connection test',
+      activitySummary: 'Trusted session without live connection should use fresh relay ticket',
       report: null,
-      sessionStore: noLiveReuseState,
+      sessionStore: noLiveFreshTicketState,
       _deps: {
         currentPeerConnectionFn: () => null,
         exchangeOverTransportFn: async ({ request, reuseExistingConnection = false }) => {
-          noLiveReuseCalls.push({
+          noLiveFreshTicketCalls.push({
             reuseExistingConnection,
             peerSessionId: request?.params?.metadata?.peerSessionId,
             relayConnectTicket: request?.params?.metadata?.relayConnectTicket ?? ''
@@ -3061,24 +3127,34 @@ process.exit(2)
               message: {
                 kind: 'message',
                 role: 'agent',
-                parts: [{ kind: 'text', text: 'trusted-no-live-ok' }]
+                parts: [{ kind: 'text', text: 'trusted-no-live-fresh-ticket-ok' }]
               }
             }
           }
         },
-        currentTransportFn: async () => {
-          throw new Error('should not create a fresh relay ticket when a trusted conversation session is reusable')
-        },
-        createConnectTicketWithRecoveryFn: async () => {
-          throw new Error('should not create a fresh relay ticket when a trusted conversation session is reusable')
-        }
+        currentTransportFn: async () => ({
+          peerId: 'peer-local',
+          streamProtocol: '/agentsquared/reuse-fallback/1.0',
+          listenAddrs: [],
+          relayAddrs: ['/dns4/relay.agentsquared.net/tcp/4051/p2p/peer-remote-no-live/p2p-circuit'],
+          supportedBindings: ['libp2p-a2a-jsonrpc'],
+          a2aProtocolVersion: 'a2a-jsonrpc-custom-binding/2026-03'
+        }),
+        createConnectTicketWithRecoveryFn: async () => ({
+          ticket: { ticket: 'fresh-ticket-for-no-live-session' },
+          targetTransport: {
+            peerId: 'peer-remote-no-live',
+            streamProtocol: '/agentsquared/reuse-fallback/1.0',
+            listenAddrs: ['/ip4/127.0.0.1/tcp/40124']
+          }
+        })
       }
     })
-    assert.equal(noLiveReuseCalls.length, 1)
-    assert.equal(noLiveReuseCalls[0].reuseExistingConnection, false)
-    assert.equal(noLiveReuseCalls[0].peerSessionId, 'peer_cached_no_live')
-    assert.equal(noLiveReuseCalls[0].relayConnectTicket, '')
-    assert.equal(peerResponseText(noLiveReuseResult.response), 'trusted-no-live-ok')
+    assert.equal(noLiveFreshTicketCalls.length, 1)
+    assert.equal(noLiveFreshTicketCalls[0].reuseExistingConnection, false)
+    assert.equal(noLiveFreshTicketCalls[0].peerSessionId, 'peer_cached_no_live')
+    assert.equal(noLiveFreshTicketCalls[0].relayConnectTicket, 'fresh-ticket-for-no-live-session')
+    assert.equal(peerResponseText(noLiveFreshTicketResult.response), 'trusted-no-live-fresh-ticket-ok')
 
     const transport = requireListeningTransport(responder, {
       binding: 'libp2p-a2a-jsonrpc',
