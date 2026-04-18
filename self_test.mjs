@@ -174,6 +174,26 @@ async function main() {
   }
 
   {
+    const slowGatewayServer = http.createServer((_req, res) => {
+      setTimeout(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: true, transport: 'node-http' }))
+      }, 80)
+    })
+    await new Promise((resolve) => slowGatewayServer.listen(0, '127.0.0.1', resolve))
+    const port = slowGatewayServer.address().port
+    const response = await requestJson(`http://127.0.0.1:${port}/connect`, {
+      method: 'POST',
+      payload: { hello: 'gateway' },
+      timeoutMs: 0,
+      fallbackOnNetworkError: false,
+      preferNodeHttp: true
+    })
+    assert.deepEqual(response, { ok: true, transport: 'node-http' })
+    await new Promise((resolve) => slowGatewayServer.close(resolve))
+  }
+
+  {
     const notifications = []
     await notifyLateConnectResult({
       ownerNotifier: async (payload) => {
