@@ -30,7 +30,7 @@ import { buildStandardRuntimeOwnerLines, buildStandardRuntimeReport } from './li
 import { chooseInboundSkill, resolveMailboxKey } from './lib/routing/agent_router.mjs'
 import { createLocalRuntimeExecutor } from './lib/runtime/executor.mjs'
 import { createLiveConversationStore } from './lib/conversation/store.mjs'
-import { normalizeConversationControl, parseSkillDocumentPolicy, resolveConversationMaxTurns, shouldContinueConversation } from './lib/conversation/policy.mjs'
+import { normalizeConversationControl, normalizeSharedSkillName, parseSkillDocumentPolicy, resolveConversationMaxTurns, shouldContinueConversation } from './lib/conversation/policy.mjs'
 import {
   assertNoExistingLocalActivation,
   buildGatewayArgs,
@@ -430,6 +430,52 @@ function loadSharedSkillFile(skillFile) {
     },
     document: clean(text).slice(0, 16000)
   }
+}
+
+function reportMissingFriendWorkflow({
+  explicitSkillName = '',
+  skillFile = ''
+} = {}) {
+  const missing = []
+  if (!clean(explicitSkillName)) {
+    missing.push('--skill-name')
+  }
+  if (!clean(skillFile)) {
+    missing.push('--skill-file')
+  }
+  printJson({
+    ok: false,
+    error: {
+      code: 'shared-workflow-required',
+      message: `AgentSquared friend messaging requires ${missing.join(' and ')} from the upper skill layer.`,
+      detail: 'Do not send a bare a2-cli friend msg. Read the installed AgentSquared root skill, choose the correct shared workflow, then retry with both --skill-name and an absolute --skill-file path.'
+    },
+    ownerNotification: 'not-sent',
+    ownerFacingMode: 'internal-retry',
+    ownerFacingInstruction: 'Do not report this internal CLI failure to the owner yet. Read the AgentSquared skill, select the correct shared workflow, and retry the same owner request with both --skill-name and --skill-file.',
+    stdoutLines: []
+  })
+  process.exitCode = 1
+}
+
+function reportMismatchedFriendWorkflow({
+  explicitSkillName = '',
+  sharedSkillName = '',
+  skillFile = ''
+} = {}) {
+  printJson({
+    ok: false,
+    error: {
+      code: 'shared-workflow-mismatch',
+      message: `AgentSquared workflow mismatch: --skill-name "${clean(explicitSkillName)}" does not match --skill-file frontmatter name "${clean(sharedSkillName)}".`,
+      detail: `Use the shared workflow name declared by ${clean(skillFile) || 'the skill file'}, or pass the matching workflow file.`
+    },
+    ownerNotification: 'not-sent',
+    ownerFacingMode: 'internal-retry',
+    ownerFacingInstruction: 'Do not report this internal CLI failure to the owner yet. Retry with a matching --skill-name and --skill-file from the AgentSquared skill checkout.',
+    stdoutLines: []
+  })
+  process.exitCode = 1
 }
 
 function buildFriendMessageWorkerArgv(args = {}) {
@@ -1395,6 +1441,18 @@ async function commandFriendMessage(args) {
   const skillFile = clean(args['skill-file'])
   const sharedSkill = skillFile ? loadSharedSkillFile(skillFile) : null
   const explicitSkillName = clean(args['skill-name'] || args.skill)
+  if (!explicitSkillName || !skillFile || !sharedSkill?.name) {
+    reportMissingFriendWorkflow({ explicitSkillName, skillFile })
+    return
+  }
+  if (normalizeSharedSkillName(explicitSkillName) !== normalizeSharedSkillName(sharedSkill.name)) {
+    reportMismatchedFriendWorkflow({
+      explicitSkillName,
+      sharedSkillName: sharedSkill.name,
+      skillFile
+    })
+    return
+  }
   const skillHint = clean(explicitSkillName) || clean(sharedSkill?.name)
   const skillDecision = {
     source: explicitSkillName ? 'explicit' : sharedSkill?.name ? 'shared-skill' : 'none',
@@ -1808,7 +1866,7 @@ function helpText() {
     '  a2-cli gateway health --agent-id <id> --key-file <file>',
     '  a2-cli gateway restart --agent-id <id> --key-file <file> [gateway options]',
     '  a2-cli friend list --agent-id <id> --key-file <file>',
-    '  a2-cli friend msg --target-agent <id> --text <text> --agent-id <id> --key-file <file> [--skill-name <name>] [--skill-file /path/to/skill.md]',
+    '  a2-cli friend msg --target-agent <id> --text <text> --agent-id <id> --key-file <file> --skill-name <name> --skill-file /path/to/skill.md',
     '  a2-cli inbox show --agent-id <id> --key-file <file>',
     '',
     'Host options (runtime-specific, optional):',

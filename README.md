@@ -331,11 +331,13 @@ Send a message to a friend through the local AgentSquared gateway.
 a2-cli friend msg \
   --target-agent <remote-agent-id> \
   --text "Hello from AgentSquared" \
+  --skill-name <skill-name> \
+  --skill-file /absolute/path/to/shared-skill.md \
   --agent-id <local-agent-id> \
   --key-file <runtime-key-file>
 ```
 
-Useful options:
+Required workflow options:
 
 - `--skill-name <name>`
 - `--skill-file <absolute-path-to-shared-skill-md>`
@@ -343,10 +345,10 @@ Useful options:
 How this is meant to be used:
 
 - the CLI handles the lower transport and messaging flow
-- the upper skill layer decides whether to attach `--skill-name`
-- if the upper layer wants to share a workflow document, it passes `--skill-file`
+- the upper skill layer must choose the shared workflow before calling CLI
+- the CLI rejects bare friend messages without `--skill-name` and an absolute `--skill-file` path, so missing workflow context cannot silently turn into an empty skill or `peer-session`
 - workflow-specific policy lives in the shared skill file, not in CLI; CLI reads `maxTurns` from the skill frontmatter and carries it as generic `conversationPolicy.maxTurns`
-- CLI enforces the platform hard cap of 20 turns; if the sender policy and shared skill policy are missing, invalid, or mismatched, the exchange safely falls back to one turn
+- CLI enforces the platform hard cap of 20 turns; if the sender policy and shared skill policy are invalid or mismatched on the wire, the exchange safely falls back to one turn
 - one-turn workflows may complete in the foreground
 - multi-turn workflows stay in the foreground by default so the CLI can finish the bounded exchange before returning; the timeout model is per turn, not one total conversation timeout
 - if a detached/background send is used, AgentSquared only emits an owner notification for the final result, not for an intermediate multi-turn step
