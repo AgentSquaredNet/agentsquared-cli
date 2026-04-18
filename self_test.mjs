@@ -16,6 +16,7 @@ import { attachInboundRouter, buildJsonRpcEnvelope, createConnectTicketWithRecov
 import { requestJson } from './lib/transport/http_json.mjs'
 import { signText } from './lib/runtime/keys.mjs'
 import { createInboxStore } from './lib/gateway/inbox.mjs'
+import { gatewayConnectJob } from './lib/gateway/api.mjs'
 import { createGatewayRuntimeState } from './lib/gateway/runtime_state.mjs'
 import { assertNoExistingLocalActivation, ensureGatewayForUse } from './lib/gateway/lifecycle.mjs'
 import { currentRuntimeRevision } from './lib/gateway/state.mjs'
@@ -191,6 +192,25 @@ async function main() {
     })
     assert.deepEqual(response, { ok: true, transport: 'node-http' })
     await new Promise((resolve) => slowGatewayServer.close(resolve))
+  }
+
+  {
+    let receivedPath = ''
+    const jobServer = http.createServer((req, res) => {
+      receivedPath = req.url
+      res.writeHead(202, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ ok: true, status: 'accepted', jobId: 'job-1' }))
+    })
+    await new Promise((resolve) => jobServer.listen(0, '127.0.0.1', resolve))
+    const port = jobServer.address().port
+    const response = await gatewayConnectJob(`http://127.0.0.1:${port}`, {
+      targetAgentId: 'agent-b@owner-b',
+      method: 'message/send',
+      message: { kind: 'message', parts: [{ kind: 'text', text: 'hello' }] }
+    })
+    assert.equal(receivedPath, '/connect-jobs')
+    assert.equal(response.status, 'accepted')
+    await new Promise((resolve) => jobServer.close(resolve))
   }
 
   {

@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 import { parseArgs, randomRequestId, requireArg } from './lib/shared/primitives.mjs'
-import { gatewayConnect, gatewayHealth, gatewayInboxIndex, gatewayOwnerNotification } from './lib/gateway/api.mjs'
+import { gatewayConnect, gatewayConnectJob, gatewayHealth, gatewayInboxIndex, gatewayOwnerNotification } from './lib/gateway/api.mjs'
 import { resolveGatewayBase, defaultGatewayStateFile, readGatewayState, currentRuntimeRevision } from './lib/gateway/state.mjs'
 import { getFriendDirectory } from './lib/transport/relay_http.mjs'
 import { generateRuntimeKeyBundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
@@ -1511,38 +1511,16 @@ async function commandFriendMessage(args) {
   const isBackgroundWorker = isTrueFlag(args['background-worker'])
 
   const gateway = await ensureGatewayForUse(args)
-  const gatewayHostRuntime = clean(gateway?.gatewayHealth?.hostRuntime?.resolved || gateway?.gatewayHealth?.hostRuntime?.id).toLowerCase()
-  const shouldDetachForHermesMultiTurn = !isBackgroundWorker
+  const shouldUseGatewayJob = !isBackgroundWorker
     && !isTrueFlag(args['friend-msg-sync'])
     && conversationPolicy.maxTurns > 1
-    && gatewayHostRuntime === 'hermes'
 
-  if (shouldDetachForHermesMultiTurn) {
-    spawnFriendMessageWorker(args)
-    printJson({
-      ok: true,
-      status: 'sent',
-      backgroundWorker: true,
-      conversationMode: 'async',
-      ownerNotification: 'sent',
-      ownerFacingMode: 'brief',
-      ownerFacingInstruction: 'Tell the owner only that the AgentSquared exchange was started through AgentSquared. Do not check inbox, wait, retry, or add your own follow-up. AgentSquared will push the final conversation result through the host API when it is ready.',
-      ownerFacingText: 'Sent through AgentSquared.',
-      ownerFacingLines: ['Sent through AgentSquared.'],
-      stdoutNoticeCode: 'OWNER_NOTIFICATION_SENT',
-      stdoutLines: []
-    })
-    return
-  }
   const context = {
     agentId: gateway.agentId,
     keyFile: gateway.keyFile,
     gatewayStateFile: gateway.gatewayStateFile
   }
   const gatewayBase = gateway.gatewayBase
-  const requestedFriendMsgWaitMs = parsePositiveInteger(args['friend-msg-wait-ms'] ?? process.env.A2_FRIEND_MSG_WAIT_MS, 0)
-  const defaultFriendMsgWaitMs = conversationPolicy.maxTurns > 1 ? 0 : 50000
-  const friendMsgWaitMs = requestedFriendMsgWaitMs || defaultFriendMsgWaitMs
   const conversationKey = randomRequestId('conversation')
   const sentAt = new Date().toISOString()
   const ownerNotificationDedupeKey = stableDedupeKey(['friend-msg', context.agentId, targetAgentId, skillHint, conversationKey, text])
@@ -1553,6 +1531,71 @@ async function commandFriendMessage(args) {
     originalText: text,
     sentAt
   })
+
+  if (shouldUseGatewayJob) {
+    const accepted = await gatewayConnectJob(
+      gatewayBase,
+      {
+        targetAgentId,
+        skillHint,
+        method: 'message/send',
+        message: {
+          kind: 'message',
+          role: 'user',
+          parts: [{ kind: 'text', text: outboundText }]
+        },
+        metadata: {
+          ...(sharedSkill ? { sharedSkill } : {}),
+          conversationPolicy,
+          originalOwnerText: text,
+          conversationKey,
+          sentAt,
+          turnIndex: 1,
+          decision: 'continue',
+          stopReason: '',
+          final: false,
+          finalize: false
+        },
+        activitySummary: 'Preparing an AgentSquared peer conversation.',
+        report: {
+          taskId: skillHint,
+          summary: `Delivered AgentSquared conversation turn 1 to ${targetAgentId}.`,
+          publicSummary: ''
+        },
+        ownerContext: {
+          originalText: text,
+          ownerLanguage,
+          ownerTimeZone,
+          dedupeKey: ownerNotificationDedupeKey,
+          startedAt: sentAt
+        }
+      },
+      {
+        timeoutMs: 5000,
+        fallbackOnNetworkError: false
+      }
+    )
+    printJson({
+      ok: true,
+      status: 'accepted',
+      backgroundWorker: false,
+      gatewayJob: true,
+      jobId: accepted?.jobId ?? '',
+      conversationKey,
+      conversationMode: 'gateway-job',
+      ownerNotification: 'pending',
+      ownerFacingMode: 'brief',
+      ownerFacingInstruction: 'Tell the owner only that the AgentSquared exchange was started through AgentSquared. Do not check inbox, wait, retry, or add your own follow-up. AgentSquared will push the final conversation result through the host API when it is ready.',
+      ownerFacingText: 'Sent through AgentSquared.',
+      ownerFacingLines: ['Sent through AgentSquared.'],
+      stdoutNoticeCode: 'OWNER_NOTIFICATION_SENT',
+      stdoutLines: []
+    })
+    return
+  }
+  const requestedFriendMsgWaitMs = parsePositiveInteger(args['friend-msg-wait-ms'] ?? process.env.A2_FRIEND_MSG_WAIT_MS, 0)
+  const defaultFriendMsgWaitMs = conversationPolicy.maxTurns > 1 ? 0 : 50000
+  const friendMsgWaitMs = requestedFriendMsgWaitMs || defaultFriendMsgWaitMs
   let result
   const turnLog = []
   let localRuntimeExecutor = null
@@ -1922,7 +1965,7 @@ function helpText() {
     '  --host-runtime <auto|openclaw|hermes>',
     '  OpenClaw: --openclaw-agent --openclaw-command --openclaw-cwd --openclaw-gateway-url --openclaw-gateway-token --openclaw-gateway-password',
     '  Hermes: --hermes-command --hermes-home --hermes-profile --hermes-api-base',
-    '  Friend messaging: --friend-msg-wait-ms <ms> (default: 50000 for one-turn workflows; Hermes multi-turn workflows may detach automatically; use --friend-msg-sync true for debugging foreground execution)'
+    '  Friend messaging: --friend-msg-wait-ms <ms> (default: 50000 for one-turn workflows; multi-turn workflows are normally handed to the local gateway job runner; use --friend-msg-sync true only for debugging foreground execution)'
   ].join('\n')
 }
 
