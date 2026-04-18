@@ -858,6 +858,20 @@ function classifyOutboundFailure(error = '', targetAgentId = '') {
       nextStep: 'Do not continue the conversation automatically. Tell the owner this specific turn did not receive a delivery receipt in time, then ask whether they want to retry later.'
     }
   }
+  if (
+    lower.includes('turn dial timed out after')
+    || lower.includes('peer dial timed out after')
+    || lower.includes('protocol stream open timed out after')
+  ) {
+    return {
+      code: 'peer-dial-timeout',
+      deliveryStatus: 'failed',
+      failureStage: 'pre-dispatch / peer-dial-timeout',
+      confirmationLevel: 'request was not dispatched to the remote peer',
+      reason: `${clean(targetAgentId) || 'The target agent'} could not be reached before the AgentSquared peer connection timeout. The request was not confirmed as sent to the remote agent.`,
+      nextStep: 'Do not switch to another target automatically. Stop here and tell the owner the target AgentSquared peer path is currently unreachable. The owner can retry this same target later.'
+    }
+  }
   if (lower.includes('turn response timed out after')) {
     return {
       code: 'turn-response-timeout',
@@ -1531,7 +1545,7 @@ async function commandFriendMessage(args) {
   const friendMsgWaitMs = requestedFriendMsgWaitMs || defaultFriendMsgWaitMs
   const conversationKey = randomRequestId('conversation')
   const sentAt = new Date().toISOString()
-  const ownerNotificationDedupeKey = stableDedupeKey(['friend-msg', context.agentId, targetAgentId, skillHint, text])
+  const ownerNotificationDedupeKey = stableDedupeKey(['friend-msg', context.agentId, targetAgentId, skillHint, conversationKey, text])
   const outboundText = buildSkillOutboundText({
     localAgentId: context.agentId,
     targetAgentId,

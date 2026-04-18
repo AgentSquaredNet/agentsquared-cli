@@ -2652,6 +2652,68 @@ process.exit(2)
     const duplicatePendingResult = await duplicatePendingSecond.responsePromise
     assert.deepEqual(duplicatePendingResult, { ok: true })
 
+    {
+      const dialedAddrs = []
+      const fakeConnection = {
+        newStream: async () => ({
+          async close() {}
+        })
+      }
+      const fakeNode = {
+        async dial(addr, options = {}) {
+          dialedAddrs.push(addr.toString())
+          if (dialedAddrs.length === 1) {
+            await new Promise((resolve, reject) => {
+              options.signal?.addEventListener('abort', () => reject(options.signal.reason ?? new Error('aborted')), { once: true })
+            })
+          }
+          return fakeConnection
+        },
+        getConnections() {
+          return dialedAddrs.length > 1 ? [fakeConnection] : []
+        }
+      }
+      const stream = await dialProtocol(fakeNode, {
+        peerId: '12D3KooWFnFqd8ts7JicbPAw39htCYWpzFgARY3eAMhhwX75yfqq',
+        streamProtocol: '/agentsquared/test/1.0',
+        dialAddrs: [
+          '/ip4/127.0.0.1/tcp/40111/p2p/12D3KooWFnFqd8ts7JicbPAw39htCYWpzFgARY3eAMhhwX75yfqq',
+          '/ip4/127.0.0.1/tcp/40112/p2p/12D3KooWFnFqd8ts7JicbPAw39htCYWpzFgARY3eAMhhwX75yfqq'
+        ]
+      }, { dialTimeoutMs: 10 })
+      assert.ok(stream)
+      assert.equal(dialedAddrs.length, 2)
+    }
+
+    {
+      let dialTimeoutAttempts = 0
+      await assert.rejects(
+        () => exchangeOverTransport({
+          node: {},
+          transport: {
+            peerId: 'peer-dial-timeout',
+            streamProtocol: '/agentsquared/test/1.0'
+          },
+          request: buildJsonRpcEnvelope({
+            id: 'req_dial_timeout',
+            method: 'message/send',
+            message: {
+              kind: 'message',
+              role: 'user',
+              parts: [{ kind: 'text', text: 'dial timeout' }]
+            }
+          }),
+          turnDialTimeoutMs: 10,
+          openStreamFn: async () => {
+            dialTimeoutAttempts += 1
+            return new Promise(() => {})
+          }
+        }),
+        /turn dial timed out after 250ms/i
+      )
+      assert.equal(dialTimeoutAttempts, 2)
+    }
+
     let ambiguousAttempt = 0
     let ambiguousReadCount = 0
     await assert.rejects(
@@ -3009,6 +3071,77 @@ process.exit(2)
     assert.equal(fetchRetryCalls[1].reuseExistingConnection, false)
     assert.ok(fetchRetryCalls[1].relayConnectTicket)
     assert.equal(peerResponseText(fetchRetryResult.response), 'fetch-retry-ok')
+
+    const dialTimeoutRetryCalls = []
+    const dialTimeoutRetryResult = await openDirectPeerSession({
+      apiBase: 'https://api.agentsquared.net',
+      agentId: 'agent-a@owner-a',
+      bundle,
+      node: {},
+      binding: {
+        streamProtocol: '/agentsquared/reuse-fallback/1.0'
+      },
+      targetAgentId: 'agent-b@owner-b',
+      skillName: 'workflow-alpha',
+      method: 'message/send',
+      message: {
+        kind: 'message',
+        role: 'user',
+        parts: [{ kind: 'text', text: 'reuse fallback after dial timeout' }]
+      },
+      metadata: { conversationKey: 'conv-relay-retry' },
+      activitySummary: 'Trusted reuse dial-timeout fallback test',
+      report: null,
+      sessionStore: relayRetryState,
+      _deps: {
+        currentPeerConnectionFn: () => ({}),
+        exchangeOverTransportFn: async ({ request, reuseExistingConnection = false }) => {
+          dialTimeoutRetryCalls.push({
+            reuseExistingConnection,
+            relayConnectTicket: request?.params?.metadata?.relayConnectTicket ?? ''
+          })
+          if (dialTimeoutRetryCalls.length === 1) {
+            const error = new Error('turn dial timed out after 60000ms')
+            error.code = 'A2_P2P_DIAL_TIMEOUT'
+            error.a2DispatchStage = 'pre-dispatch'
+            throw error
+          }
+          return {
+            jsonrpc: '2.0',
+            id: request.id,
+            result: {
+              message: {
+                kind: 'message',
+                role: 'agent',
+                parts: [{ kind: 'text', text: 'dial-timeout-retry-ok' }]
+              }
+            }
+          }
+        },
+        currentTransportFn: async () => ({
+          peerId: 'peer-local',
+          streamProtocol: '/agentsquared/reuse-fallback/1.0',
+          listenAddrs: [],
+          relayAddrs: ['/dns4/relay.agentsquared.net/tcp/4051/p2p/peer-remote/p2p-circuit'],
+          supportedBindings: ['libp2p-a2a-jsonrpc'],
+          a2aProtocolVersion: 'a2a-jsonrpc-custom-binding/2026-03'
+        }),
+        createConnectTicketWithRecoveryFn: async () => ({
+          ticket: { ticket: relayRetryTicket },
+          targetTransport: {
+            peerId: 'peer-remote',
+            streamProtocol: '/agentsquared/reuse-fallback/1.0',
+            listenAddrs: ['/ip4/127.0.0.1/tcp/40126']
+          }
+        })
+      }
+    })
+    assert.equal(dialTimeoutRetryCalls.length, 2)
+    assert.equal(dialTimeoutRetryCalls[0].reuseExistingConnection, true)
+    assert.equal(dialTimeoutRetryCalls[0].relayConnectTicket, '')
+    assert.equal(dialTimeoutRetryCalls[1].reuseExistingConnection, false)
+    assert.ok(dialTimeoutRetryCalls[1].relayConnectTicket)
+    assert.equal(peerResponseText(dialTimeoutRetryResult.response), 'dial-timeout-retry-ok')
 
     const relayRetryFailCalls = []
     await assert.rejects(
