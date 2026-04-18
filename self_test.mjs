@@ -2341,6 +2341,62 @@ process.exit(2)
     await acknowledgeJsonRpc(duplicateStream2, duplicateResponse2)
     await duplicateStream2.close()
 
+    let closedBeforeResponseRuns = 0
+    const closedBeforeResponseHandled = (async () => {
+      const inbound = await responderState.nextInbound({ waitMs: 1000 })
+      assert.ok(inbound)
+      closedBeforeResponseRuns += 1
+      await sleep(20)
+      responderState.respondInbound({
+        inboundId: inbound.inboundId,
+        result: {
+          message: {
+            kind: 'message',
+            role: 'agent',
+            parts: [{ kind: 'text', text: 'closed-before-response-ok' }]
+          }
+        }
+      })
+    })()
+    const closedBeforeResponsePayload = JSON.stringify(buildJsonRpcEnvelope({
+      id: 'req_router_closed_before_response',
+      method: 'message/send',
+      message: {
+        kind: 'message',
+        role: 'user',
+        parts: [{ kind: 'text', text: 'close before response' }]
+      },
+      metadata: {
+        conversationKey: 'conv-existing',
+        peerSessionId: 'peer_existing',
+        from: 'assistant@owner-a',
+        to: 'agent-a@owner-a'
+      }
+    }))
+    const closedBeforeResponseStream1 = await dialProtocol(initiator, {
+      streamProtocol: routerProtocol,
+      peerId: responder.peerId.toString(),
+      listenAddrs: responder.getMultiaddrs().map((addr) => addr.toString())
+    })
+    await writeLine(closedBeforeResponseStream1, closedBeforeResponsePayload)
+    const closedBeforeResponseReceipt = await readJsonMessage(closedBeforeResponseStream1)
+    assert.equal(isJsonRpcReceipt(closedBeforeResponseReceipt, 'req_router_closed_before_response'), true)
+    await closedBeforeResponseStream1.close()
+    await closedBeforeResponseHandled
+    await sleep(20)
+
+    const closedBeforeResponseStream2 = await dialProtocol(initiator, {
+      streamProtocol: routerProtocol,
+      peerId: responder.peerId.toString(),
+      listenAddrs: responder.getMultiaddrs().map((addr) => addr.toString())
+    })
+    await writeLine(closedBeforeResponseStream2, closedBeforeResponsePayload)
+    const closedBeforeResponseResult = await readResponseAfterReceipt(closedBeforeResponseStream2, 'req_router_closed_before_response')
+    assert.equal(closedBeforeResponseResult.result.message.parts[0].text, 'closed-before-response-ok')
+    assert.equal(closedBeforeResponseRuns, 1)
+    await acknowledgeJsonRpc(closedBeforeResponseStream2, closedBeforeResponseResult)
+    await closedBeforeResponseStream2.close()
+
     const rejectedHandled = (async () => {
       const inbound = await responderState.nextInbound({ waitMs: 1000 })
       assert.ok(inbound)
