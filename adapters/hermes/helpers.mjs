@@ -16,25 +16,42 @@ function excerpt(text, maxLength = 240) {
   return compact.length > maxLength ? `${compact.slice(0, maxLength - 3)}...` : compact
 }
 
-function parseJsonOutput(text, label = 'Hermes response') {
+function tryParseJsonOutput(text, label = 'Hermes response') {
   const trimmed = clean(text)
   if (!trimmed) {
-    throw new Error(`${label} was empty`)
+    return {
+      parsed: null,
+      error: new Error(`${label} was empty`)
+    }
   }
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
-  const candidate = fenced?.[1]?.trim() || trimmed
-  const start = candidate.indexOf('{')
-  const end = candidate.lastIndexOf('}')
+  const entireFence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/i)
+  const candidate = entireFence?.[1]?.trim() || trimmed
+  const start = candidate.trimStart().startsWith('{') ? candidate.indexOf('{') : -1
+  const end = start >= 0 ? candidate.lastIndexOf('}') : -1
   const jsonText = start >= 0 && end > start ? candidate.slice(start, end + 1) : candidate
   try {
     const parsed = JSON.parse(jsonText)
     if (!parsed || typeof parsed !== 'object') {
       throw new Error('response was not an object')
     }
-    return parsed
+    return {
+      parsed,
+      error: null
+    }
   } catch (error) {
-    throw new Error(`${label} was not valid JSON: ${error.message}`)
+    return {
+      parsed: null,
+      error: new Error(`${label} was not valid JSON: ${error.message}`)
+    }
   }
+}
+
+function parseJsonOutput(text, label = 'Hermes response') {
+  const result = tryParseJsonOutput(text, label)
+  if (result.parsed) {
+    return result.parsed
+  }
+  throw result.error
 }
 
 export const HERMES_STRUCTURED_NO_TOOLS_INSTRUCTIONS = [
@@ -161,8 +178,59 @@ export function parseHermesTaskResult(payload, {
   defaultDecision = 'done',
   defaultStopReason = ''
 } = {}) {
-  const parsed = parseJsonOutput(extractHermesResponseText(payload), 'Hermes task result')
   const selectedSkill = clean(defaultSkill)
+  const rawText = extractHermesResponseText(payload)
+  const parseResult = tryParseJsonOutput(rawText, 'Hermes task result')
+  if (!parseResult.parsed) {
+    const peerText = clean(rawText)
+    if (!peerText) {
+      throw parseResult.error
+    }
+    const conversation = normalizeConversationControl({}, {
+      defaultTurnIndex,
+      defaultDecision,
+      defaultStopReason
+    })
+    const reportText = `${clean(remoteAgentId) || 'A remote Agent'} sent an AgentSquared turn and Hermes replied in plain text. AgentSquared normalized that reply into the A2A envelope.`
+    return {
+      selectedSkill,
+      peerResponse: {
+        message: {
+          kind: 'message',
+          role: 'agent',
+          parts: [{ kind: 'text', text: peerText }]
+        },
+        metadata: {
+          selectedSkill,
+          modelSelectedSkill: '',
+          runtimeAdapter: 'hermes',
+          hermesParseFallback: 'plain-text-task-response',
+          hermesParseError: clean(parseResult.error?.message),
+          turnIndex: conversation.turnIndex,
+          decision: conversation.decision,
+          stopReason: conversation.stopReason,
+          final: conversation.final,
+          finalize: conversation.final
+        }
+      },
+      ownerReport: {
+        title: `**🅰️✌️ New AgentSquared message from ${clean(remoteAgentId) || 'a remote agent'}**`,
+        summary: reportText,
+        message: reportText,
+        selectedSkill,
+        modelSelectedSkill: '',
+        runtimeAdapter: 'hermes',
+        hermesParseFallback: 'plain-text-task-response',
+        hermesParseError: clean(parseResult.error?.message),
+        turnIndex: conversation.turnIndex,
+        decision: conversation.decision,
+        stopReason: conversation.stopReason,
+        final: conversation.final,
+        finalize: conversation.final
+      }
+    }
+  }
+  const parsed = parseResult.parsed
   const modelSelectedSkill = clean(parsed.selectedSkill)
   const peerText = clean(parsed.peerResponse) || clean(parsed.peerResponseText) || clean(parsed.reply)
   if (!peerText) {

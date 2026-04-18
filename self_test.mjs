@@ -20,7 +20,7 @@ import { gatewayConnectJob } from './lib/gateway/api.mjs'
 import { createGatewayRuntimeState } from './lib/gateway/runtime_state.mjs'
 import { assertNoExistingLocalActivation, ensureGatewayForUse } from './lib/gateway/lifecycle.mjs'
 import { currentRuntimeRevision } from './lib/gateway/state.mjs'
-import { notifyLateConnectResult } from './lib/gateway/server.mjs'
+import { isClientDisconnected, notifyLateConnectResult } from './lib/gateway/server.mjs'
 import { chooseInboundSkill, createAgentRouter, createMailboxScheduler } from './lib/routing/agent_router.mjs'
 import { createLiveConversationStore } from './lib/conversation/store.mjs'
 import { createLocalRuntimeExecutor, createOwnerNotifier } from './lib/runtime/executor.mjs'
@@ -215,6 +215,14 @@ async function main() {
   }
 
   {
+    assert.equal(isClientDisconnected({ destroyed: true, aborted: false }, { closed: true, destroyed: false, writableEnded: false }, false), false)
+    assert.equal(isClientDisconnected({ destroyed: false, aborted: true }, { closed: false, destroyed: false, writableEnded: false }, false), true)
+    assert.equal(isClientDisconnected({ destroyed: false, aborted: false }, { closed: false, destroyed: true, writableEnded: false }, false), true)
+    assert.equal(isClientDisconnected({ destroyed: true, aborted: false }, { closed: true, destroyed: true, writableEnded: true }, false), false)
+    assert.equal(isClientDisconnected({}, {}, true), true)
+  }
+
+  {
     const prompt = buildHermesTaskPrompt({
       localAgentId: 'hermes@owner',
       remoteAgentId: 'peer@owner',
@@ -260,6 +268,40 @@ async function main() {
     assert.match(prompt, /compare concrete workflows/)
     assert.match(prompt, /Owner-visible inbound request:\nlearn my skills/)
     assert.doesNotMatch(prompt, /Owner-visible inbound request:\noriginal owner goal/)
+  }
+
+  {
+    const parsed = parseHermesTaskResult({
+      output: [
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{
+            type: 'output_text',
+            text: [
+              'Honest answer: my current workflow is simpler than yours.',
+              '',
+              '```json',
+              '{ "example": "this code fence is part of the peer-facing answer" }',
+              '```',
+              '',
+              'What pattern would you compare next?'
+            ].join('\n')
+          }]
+        }
+      ]
+    }, {
+      defaultSkill: 'workflow_alpha',
+      remoteAgentId: 'peer@owner',
+      inboundId: 'req-plain',
+      defaultTurnIndex: 3,
+      defaultDecision: 'continue'
+    })
+    assert.equal(parsed.peerResponse.metadata.hermesParseFallback, 'plain-text-task-response')
+    assert.equal(parsed.peerResponse.metadata.decision, 'continue')
+    assert.equal(parsed.peerResponse.metadata.final, false)
+    assert.match(parsed.peerResponse.message.parts[0].text, /Honest answer/)
+    assert.match(parsed.peerResponse.message.parts[0].text, /```json/)
   }
 
   {
@@ -1055,10 +1097,13 @@ process.exit(2)
       }
     })
     assert.match(taskPrompt, /do not ask the owner or the remote agent to prove friendship again/i)
+    assert.match(taskPrompt, /Do not call tools/i)
     assert.match(taskPrompt, /turnIndex: 3/)
     assert.match(taskPrompt, /platformMaxTurns: 20/)
     assert.match(taskPrompt, /localSkillMaxTurns: 8/)
     assert.match(taskPrompt, /sharedSkillName: workflow_beta/)
+    assert.doesNotMatch(taskPrompt, /read and follow the official root AgentSquared skill/i)
+    assert.doesNotMatch(taskPrompt, /sharedSkillDocument:/)
     assert.match(taskPrompt, /messageText: From now on we are friends/)
     assert.doesNotMatch(taskPrompt, /messageText: original owner goal/)
 
@@ -1449,7 +1494,7 @@ process.exit(2)
     assert.equal(parsedOutboundTemplate.ownerRequest, 'hello')
     assert.equal(parsedOutboundTemplate.from, 'agent-a@owner-a')
     assert.equal(parsedOutboundTemplate.to, 'agent-b@owner-b')
-    assert.match(outboundTemplate, /Please read the AgentSquared official skill before sending or replying through AgentSquared\./)
+    assert.doesNotMatch(outboundTemplate, /Please read the AgentSquared official skill before sending or replying through AgentSquared\./)
     assert.doesNotMatch(outboundTemplate, /Workflow:/)
     const mutualLearningOutboundTemplate = buildSkillOutboundText({
       localAgentId: 'agent-a@owner-a',
