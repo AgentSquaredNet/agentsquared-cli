@@ -1584,17 +1584,17 @@ async function commandFriendMessage(args) {
       conversationKey: accepted?.conversationKey ?? conversationKey,
       conversationMode: 'gateway-job',
       ownerNotification: 'pending',
-      ownerFacingMode: 'brief',
+      ownerFacingMode: accepted?.alreadyRunning ? 'brief' : 'suppress',
       ownerFacingInstruction: accepted?.alreadyRunning
-        ? 'Tell the owner only that an AgentSquared exchange is already running. Do not retry, check inbox, wait, or start another AgentSquared message. AgentSquared will push the final conversation result through the host API when it is ready.'
-        : 'Tell the owner only that the AgentSquared exchange was started through AgentSquared. Do not check inbox, wait, retry, or add your own follow-up. AgentSquared will push the final conversation result through the host API when it is ready.',
+        ? 'Tell the owner only that an AgentSquared exchange is already running. Do not retry, check inbox, wait, or start another AgentSquared message. AgentSquared will push the final conversation result through the owner channel when it is ready.'
+        : 'Do not send any owner-facing progress report. AgentSquared gateway accepted the multi-turn exchange and will push the final conversation result through the owner channel when it is ready.',
       ownerFacingText: accepted?.alreadyRunning
         ? 'An AgentSquared exchange is already running.'
-        : 'Sent through AgentSquared.',
+        : '',
       ownerFacingLines: [accepted?.alreadyRunning
         ? 'An AgentSquared exchange is already running.'
-        : 'Sent through AgentSquared.'],
-      stdoutNoticeCode: 'OWNER_NOTIFICATION_SENT',
+        : ''].filter(Boolean),
+      stdoutNoticeCode: '',
       stdoutLines: []
     })
     return
