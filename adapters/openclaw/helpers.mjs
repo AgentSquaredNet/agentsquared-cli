@@ -777,7 +777,6 @@ export function buildOpenClawTaskPrompt({
   selectedSkill,
   item,
   conversationTranscript = '',
-  relationshipSummary = '',
   senderSkillInventory = ''
 }) {
   const rawInboundText = peerResponseText(item?.request?.params?.message)
@@ -830,12 +829,6 @@ export function buildOpenClawTaskPrompt({
     `- platformMaxTurns: ${PLATFORM_MAX_TURNS}`,
     `- localSkillMaxTurns: ${localSkillMaxTurns}`,
     `- recommendedDecision: ${defaultShouldContinue ? 'continue' : 'done'}`,
-    ...(clean(relationshipSummary)
-      ? [
-          '- relationshipSummary:',
-          clean(relationshipSummary)
-        ]
-      : []),
     ...(clean(conversationTranscript)
       ? [
           '- currentConversationTranscript:',
@@ -947,7 +940,6 @@ export function buildOpenClawCombinedPrompt({
   selectedSkill,
   item,
   conversationTranscript = '',
-  relationshipSummary = '',
   senderSkillInventory = ''
 } = {}) {
   const rawInboundText = peerResponseText(item?.request?.params?.message)
@@ -1008,9 +1000,6 @@ export function buildOpenClawCombinedPrompt({
     clean(conversationTranscript)
       ? `- currentConversationTranscript:\n${clean(conversationTranscript)}`
       : '- currentConversationTranscript:\n(none yet for this live conversation)',
-    clean(relationshipSummary)
-      ? `- relationshipSummary:\n${clean(relationshipSummary)}`
-      : '- relationshipSummary:\n(none yet)',
     clean(senderSkillInventory)
       ? `- senderSharedContext:\n${clean(senderSkillInventory)}`
       : '',

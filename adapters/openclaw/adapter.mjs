@@ -7,13 +7,10 @@ import {
   buildOpenClawSafetyPrompt,
   buildOpenClawTaskPrompt,
   latestAssistantText,
-  normalizeOpenClawSafetySessionKey,
-  normalizeOpenClawSessionKey,
   normalizeSessionList,
   OPENCLAW_AGENT_SQUARED_NO_TOOLS_PROMPT,
   ownerReportText,
   parseOpenClawCombinedResult,
-  parseOpenClawSafetyResult,
   parseOpenClawTaskResult,
   peerResponseText,
   readOpenClawRunId,
@@ -238,68 +235,9 @@ export function createOpenClawAdapter({
     })
   }
 
-  async function readRelationshipSummary(client, sessionKey) {
-    if (!clean(sessionKey)) {
-      return ''
-    }
-    try {
-      const history = await requestOpenClaw(client, 'chat.history', {
-        sessionKey,
-        limit: 12
-      }, timeoutMs, 'relationship chat history')
-      return latestAssistantText(history)
-    } catch {
-      return ''
-    }
-  }
-
-  async function persistRelationshipSummary(client, {
-    relationSessionKey,
-    remoteAgentId,
-    selectedSkill,
-    transcript,
-    ownerSummary
-  } = {}) {
-    if (!clean(relationSessionKey) || !clean(ownerSummary)) {
-      return null
-    }
-    const prompt = [
-      `You are maintaining long-term AgentSquared relationship memory for local agent ${clean(localAgentId)} about remote agent ${clean(remoteAgentId)}.`,
-      `Skill context: ${clean(selectedSkill) || '(none)'}`,
-      '',
-      'Store only a concise long-term summary for future conversations.',
-      'Do not preserve raw turn-by-turn detail unless it matters long-term.',
-      'Prefer stable facts, collaboration preferences, trust signals, and useful future follow-up notes.',
-      '',
-      'Latest completed live conversation summary:',
-      clean(ownerSummary),
-      '',
-      'Transcript excerpt from the just-finished live conversation:',
-      clean(transcript) || '(none)',
-      '',
-      'Return one short memory summary.'
-    ].join('\n')
-    const accepted = await requestOpenClaw(client, 'agent', {
-      agentId: agentName,
-      sessionKey: relationSessionKey,
-      message: prompt,
-      idempotencyKey: stableId('agentsquared-relationship-memory', localAgentId, remoteAgentId, ownerSummary)
-    }, timeoutMs, 'relationship memory agent request', { openclawAgent: agentName, localAgentId })
-    const runId = readOpenClawRunId(accepted)
-    if (!runId) {
-      return null
-    }
-    await requestOpenClaw(client, 'agent.wait', {
-      runId,
-      timeoutMs
-    }, timeoutMs + 1000, 'relationship memory wait')
-    return runId
-  }
-
   async function executeInbound({
     item,
-    selectedSkill,
-    mailboxKey
+    selectedSkill
   }) {
     const remoteAgentId = clean(item?.remoteAgentId)
     const incomingSkillHint = clean(item?.suggestedSkill || item?.request?.params?.metadata?.skillHint)
@@ -403,7 +341,6 @@ export function createOpenClawAdapter({
           }
         }
 
-        const relationSessionKey = normalizeOpenClawSessionKey(localAgentId, remoteAgentId || mailboxKey || 'unknown', sessionPrefix)
         const liveConversationState = normalizeConversationControl(item?.request?.params?.metadata ?? {}, {
           defaultTurnIndex: 1,
           defaultDecision: 'done',
@@ -420,7 +357,6 @@ export function createOpenClawAdapter({
           selectedSkill
         }) ?? null
         const conversationTranscript = conversationStore?.transcript?.(liveConversation?.conversationKey || conversationKey) ?? ''
-        const relationshipSummary = await readRelationshipSummary(client, relationSessionKey)
         const localSkillMaxTurns = resolveConversationMaxTurns({
           conversationPolicy: metadata?.conversationPolicy ?? null,
           sharedSkill: metadata?.sharedSkill ?? null,
@@ -442,7 +378,6 @@ export function createOpenClawAdapter({
           selectedSkill,
           item,
           conversationTranscript,
-          relationshipSummary,
           senderSkillInventory: clean(metadata?.localSkillInventory)
         })
 
@@ -613,23 +548,7 @@ export function createOpenClawAdapter({
           timeZone: ownerTimeZone,
           localTime: true
         })
-        let relationshipMemoryRunId = ''
         if (conversation.final) {
-          await persistRelationshipSummary(client, {
-            relationSessionKey,
-            remoteAgentId,
-            selectedSkill: parsed.selectedSkill,
-            transcript: updatedConversation?.turns?.map((turn) => [
-              `Turn ${turn.turnIndex}:`,
-              `Remote: ${turn.inboundText || '(empty)'}`,
-              `Reply: ${turn.replyText || '(empty)'}`,
-              `Decision: ${turn.decision || 'done'}`,
-              turn.stopReason ? `Stop Reason: ${turn.stopReason}` : ''
-            ].filter(Boolean).join('\n')).join('\n\n') || conversationTranscript,
-            ownerSummary: safeOwnerSummary
-          }).then((nextRunId) => {
-            relationshipMemoryRunId = clean(nextRunId)
-          })
           conversationStore?.closeConversation?.(updatedConversation?.conversationKey || liveConversation?.conversationKey || conversationKey, safeOwnerSummary)
         }
         return {
@@ -647,7 +566,6 @@ export function createOpenClawAdapter({
               conversationKey,
               openclawRunId: runId,
               openclawSessionKey: sessionKey,
-              openclawRelationSessionKey: relationSessionKey,
               openclawGatewayUrl: gatewayContext.gatewayUrl,
               turnIndex: conversation.turnIndex,
               decision: conversation.decision,
@@ -664,8 +582,6 @@ export function createOpenClawAdapter({
             runtimeAdapter: 'openclaw',
             openclawRunId: runId,
             openclawSessionKey: sessionKey,
-            openclawRelationSessionKey: relationSessionKey,
-            relationshipMemoryRunId,
             openclawGatewayUrl: gatewayContext.gatewayUrl,
             turnIndex: conversation.turnIndex,
             decision: conversation.decision,
