@@ -45,6 +45,78 @@ function nowMs() {
   return Date.now()
 }
 
+function describeOpenClawError(error = null, seen = new Set()) {
+  if (error == null) {
+    return ''
+  }
+  if (typeof error !== 'object') {
+    return clean(error)
+  }
+  if (seen.has(error)) {
+    return ''
+  }
+  seen.add(error)
+  const parts = []
+  const message = clean(error.message)
+  if (message) {
+    parts.push(message)
+  }
+  const code = clean(error.code || error.detailCode)
+  if (code && !parts.some((part) => part.includes(code))) {
+    parts.push(code)
+  }
+  const cause = describeOpenClawError(error.cause, seen)
+  if (cause) {
+    parts.push(`cause: ${cause}`)
+  }
+  return [...new Set(parts)].join('; ')
+}
+
+function openClawGatewayUnavailable(error = null) {
+  const lower = describeOpenClawError(error).toLowerCase()
+  return Boolean(
+    lower.includes('econnrefused')
+    || lower.includes('econnreset')
+    || lower.includes('gateway closed')
+    || lower.includes('abnormal closure')
+    || lower.includes('gateway socket is not open')
+    || lower.includes('open timed out')
+    || lower.includes('connect challenge timed out')
+    || lower.includes('websocket')
+  )
+}
+
+function wrapOpenClawRuntimeError(stage, error) {
+  const detail = describeOpenClawError(error)
+  const message = `OpenClaw runtime failed during ${clean(stage) || 'gateway request'}: ${detail || 'unknown error'}`
+  const wrapped = new Error(message, { cause: error })
+  wrapped.code = openClawGatewayUnavailable(error)
+    ? 503
+    : (Number.parseInt(`${error?.code ?? ''}`, 10) || 500)
+  wrapped.a2OpenClawStage = clean(stage)
+  wrapped.a2RuntimeStage = clean(stage)
+  wrapped.runtimeAdapter = 'openclaw'
+  wrapped.a2RuntimeAdapter = 'openclaw'
+  wrapped.a2FailureKind = 'openclaw-runtime-error'
+  wrapped.a2NoFallback = true
+  wrapped.detail = detail
+  return wrapped
+}
+
+async function requestOpenClaw(client, method, params, timeoutMs, stage, {
+  openclawAgent = '',
+  localAgentId = ''
+} = {}) {
+  try {
+    return await client.request(method, params, timeoutMs)
+  } catch (error) {
+    const reframed = method === 'agent'
+      ? reframeOpenClawAgentError(error, { openclawAgent, localAgentId })
+      : error
+    throw wrapOpenClawRuntimeError(stage || method, reframed)
+  }
+}
+
 
 
 function reframeOpenClawAgentError(error, {
@@ -115,12 +187,12 @@ export function createOpenClawAdapter({
   }
 
   async function listSessions(client) {
-    return normalizeSessionList(await client.request('sessions.list', {}, timeoutMs))
+    return normalizeSessionList(await requestOpenClaw(client, 'sessions.list', {}, timeoutMs, 'sessions list'))
   }
 
   async function preflight() {
     return withGateway(async (client, gatewayContext) => {
-      const health = await client.request('health', {}, Math.min(timeoutMs, 15000))
+      const health = await requestOpenClaw(client, 'health', {}, Math.min(timeoutMs, 15000), 'health check')
       return {
         ok: Boolean(health?.ok),
         gatewayUrl: gatewayContext.gatewayUrl,
@@ -141,10 +213,10 @@ export function createOpenClawAdapter({
       return ''
     }
     try {
-      const history = await client.request('chat.history', {
+      const history = await requestOpenClaw(client, 'chat.history', {
         sessionKey,
         limit: 12
-      }, timeoutMs)
+      }, timeoutMs, 'relationship chat history')
       return latestAssistantText(history)
     } catch {
       return ''
@@ -177,20 +249,20 @@ export function createOpenClawAdapter({
       '',
       'Return one short memory summary.'
     ].join('\n')
-    const accepted = await client.request('agent', {
+    const accepted = await requestOpenClaw(client, 'agent', {
       agentId: agentName,
       sessionKey: relationSessionKey,
       message: prompt,
       idempotencyKey: stableId('agentsquared-relationship-memory', localAgentId, remoteAgentId, ownerSummary)
-    }, timeoutMs)
+    }, timeoutMs, 'relationship memory agent request', { openclawAgent: agentName, localAgentId })
     const runId = readOpenClawRunId(accepted)
     if (!runId) {
       return null
     }
-    await client.request('agent.wait', {
+    await requestOpenClaw(client, 'agent.wait', {
       runId,
       timeoutMs
-    }, timeoutMs + 1000)
+    }, timeoutMs + 1000, 'relationship memory wait')
     return runId
   }
 
@@ -218,7 +290,8 @@ export function createOpenClawAdapter({
     const ownerTimeZone = localOwnerTimeZone()
     const conversationIdentity = resolveInboundConversationIdentity(item)
     const conversationKey = clean(conversationIdentity.conversationKey)
-    return withGateway(async (client, gatewayContext) => {
+    try {
+      return await withGateway(async (client, gatewayContext) => {
       const safetySessionKey = normalizeOpenClawSafetySessionKey(localAgentId, remoteAgentId || mailboxKey || 'unknown')
       const safetyPrompt = buildOpenClawSafetyPrompt({
         localAgentId,
@@ -226,37 +299,29 @@ export function createOpenClawAdapter({
         selectedSkill,
         item
       })
-      let safetyAccepted
-      try {
-        safetyAccepted = await client.request('agent', {
-          agentId: agentName,
-          sessionKey: safetySessionKey,
-          message: safetyPrompt,
-          extraSystemPrompt: OPENCLAW_AGENT_SQUARED_NO_TOOLS_PROMPT,
-          idempotencyKey: `agentsquared-safety-${clean(item?.inboundId) || randomId('inbound')}`
-        }, timeoutMs)
-      } catch (error) {
-        throw reframeOpenClawAgentError(error, {
-          openclawAgent: agentName,
-          localAgentId
-        })
-      }
+      const safetyAccepted = await requestOpenClaw(client, 'agent', {
+        agentId: agentName,
+        sessionKey: safetySessionKey,
+        message: safetyPrompt,
+        extraSystemPrompt: OPENCLAW_AGENT_SQUARED_NO_TOOLS_PROMPT,
+        idempotencyKey: `agentsquared-safety-${clean(item?.inboundId) || randomId('inbound')}`
+      }, timeoutMs, 'safety agent request', { openclawAgent: agentName, localAgentId })
       const safetyRunId = readOpenClawRunId(safetyAccepted)
       if (!safetyRunId) {
         throw new Error('OpenClaw safety triage did not return a runId.')
       }
-      const safetyWaited = await client.request('agent.wait', {
+      const safetyWaited = await requestOpenClaw(client, 'agent.wait', {
         runId: safetyRunId,
         timeoutMs
-      }, timeoutMs + 1000)
+      }, timeoutMs + 1000, 'safety agent wait')
       const safetyStatus = readOpenClawStatus(safetyWaited).toLowerCase()
       if (safetyStatus && safetyStatus !== 'ok' && safetyStatus !== 'completed' && safetyStatus !== 'done') {
         throw new Error(`OpenClaw safety triage returned ${safetyStatus || 'an unknown status'} for run ${safetyRunId}.`)
       }
-      const safetyHistory = await client.request('chat.history', {
+      const safetyHistory = await requestOpenClaw(client, 'chat.history', {
         sessionKey: safetySessionKey,
         limit: 8
-      }, timeoutMs)
+      }, timeoutMs, 'safety chat history')
       const safetyText = latestAssistantText(safetyWaited, { runId: safetyRunId }) || latestAssistantText(safetyHistory, { runId: safetyRunId })
       if (!safetyText) {
         throw new Error(`OpenClaw safety triage did not produce a final assistant message for session ${safetySessionKey}.`)
@@ -462,39 +527,31 @@ export function createOpenClawAdapter({
         senderSkillInventory: clean(metadata?.localSkillInventory)
       })
 
-      let accepted
-      try {
-        accepted = await client.request('agent', {
-          agentId: agentName,
-          sessionKey,
-          message: prompt,
-          extraSystemPrompt: OPENCLAW_AGENT_SQUARED_NO_TOOLS_PROMPT,
-          idempotencyKey: `agentsquared-agent-${clean(item?.inboundId) || randomId('inbound')}`
-        }, timeoutMs)
-      } catch (error) {
-        throw reframeOpenClawAgentError(error, {
-          openclawAgent: agentName,
-          localAgentId
-        })
-      }
+      const accepted = await requestOpenClaw(client, 'agent', {
+        agentId: agentName,
+        sessionKey,
+        message: prompt,
+        extraSystemPrompt: OPENCLAW_AGENT_SQUARED_NO_TOOLS_PROMPT,
+        idempotencyKey: `agentsquared-agent-${clean(item?.inboundId) || randomId('inbound')}`
+      }, timeoutMs, 'task agent request', { openclawAgent: agentName, localAgentId })
       const runId = readOpenClawRunId(accepted)
       if (!runId) {
         throw new Error('OpenClaw agent call did not return a runId.')
       }
 
-      const waited = await client.request('agent.wait', {
+      const waited = await requestOpenClaw(client, 'agent.wait', {
         runId,
         timeoutMs
-      }, timeoutMs + 1000)
+      }, timeoutMs + 1000, 'task agent wait')
       const status = readOpenClawStatus(waited).toLowerCase()
       if (status && status !== 'ok' && status !== 'completed' && status !== 'done') {
         throw new Error(`OpenClaw agent.wait returned ${status || 'an unknown status'} for run ${runId}.`)
       }
 
-      const history = await client.request('chat.history', {
+      const history = await requestOpenClaw(client, 'chat.history', {
         sessionKey,
         limit: 12
-      }, timeoutMs)
+      }, timeoutMs, 'task chat history')
       const resultText = resolveFinalAssistantResultText({
         waited,
         history,
@@ -619,7 +676,13 @@ export function createOpenClawAdapter({
           finalize: conversation.final
         }
       }
-    })
+      })
+    } catch (error) {
+      if (clean(error?.runtimeAdapter) === 'openclaw') {
+        throw error
+      }
+      throw wrapOpenClawRuntimeError('inbound execution', error)
+    }
   }
 
   async function pushOwnerReport({
@@ -651,7 +714,7 @@ export function createOpenClawAdapter({
         clean(ownerRoute.channel),
         clean(ownerRoute.to)
       )
-      const payload = await client.request('send', {
+      const payload = await requestOpenClaw(client, 'send', {
         to: clean(ownerRoute.to),
         channel: clean(ownerRoute.channel),
         ...(clean(ownerRoute.accountId) ? { accountId: clean(ownerRoute.accountId) } : {}),
@@ -659,7 +722,7 @@ export function createOpenClawAdapter({
         ...(clean(ownerRoute.sessionKey) ? { sessionKey: clean(ownerRoute.sessionKey) } : {}),
         message: summary,
         idempotencyKey
-      }, timeoutMs)
+      }, timeoutMs, 'owner report send')
       return {
         delivered: true,
         attempted: true,

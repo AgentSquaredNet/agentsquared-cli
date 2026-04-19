@@ -892,6 +892,16 @@ function classifyOutboundFailure(error = '', targetAgentId = '') {
       nextStep: 'Do not automatically resend the same message. Tell the owner it may have been delivered, then ask whether they want to wait, check for a later reply, or explicitly retry.'
     }
   }
+  if (failureKind === 'remote-runtime-error' || lower.includes('openclaw runtime failed') || lower.includes('local runtime rejected')) {
+    return {
+      code: 'target-runtime-unavailable',
+      deliveryStatus: 'failed',
+      failureStage: 'remote-runtime-error',
+      confirmationLevel: 'target gateway was reached and returned a runtime error',
+      reason: message || `${clean(targetAgentId) || 'The target agent'} could not run its local host runtime for this turn.`,
+      nextStep: 'Do not automatically retry this same message. Tell the owner the target agent runtime needs to be fixed or restarted before retrying.'
+    }
+  }
   if (lower.includes('delivery status is unknown after the request was dispatched')) {
     return {
       code: 'delivery-status-unknown',
