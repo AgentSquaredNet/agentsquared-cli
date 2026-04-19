@@ -281,7 +281,8 @@ export async function postHermesResponse({
   store = false,
   noTools = false
 } = {}) {
-  if (noTools && fs.existsSync(hermesProjectRoot(hermesHome))) {
+  const resolvedBase = buildHermesApiBase({ apiBase, envVars })
+  if (noTools && !resolvedBase && fs.existsSync(hermesProjectRoot(hermesHome))) {
     return runHermesNoToolsPython({
       hermesHome,
       input,
@@ -289,7 +290,6 @@ export async function postHermesResponse({
       timeoutMs
     })
   }
-  const resolvedBase = buildHermesApiBase({ apiBase, envVars })
   const response = await fetchHermesJson(resolvedBase, '/v1/responses', {
     method: 'POST',
     apiKey: clean(envVars.API_SERVER_KEY),
