@@ -1,7 +1,7 @@
 import { withOpenClawGatewayClient } from './ws_client.mjs'
 import { buildReceiverBaseReport, inferOwnerFacingLanguage, parseAgentSquaredOutboundEnvelope } from '../../lib/conversation/templates.mjs'
 import { normalizeConversationControl, resolveConversationMaxTurns, resolveInboundConversationIdentity } from '../../lib/conversation/policy.mjs'
-import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
+import { assessTrustedFriendInboundSafety, scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import {
   buildOpenClawSafetyPrompt,
   buildOpenClawTaskPrompt,
@@ -194,6 +194,15 @@ export function createOpenClawAdapter({
     return runId
   }
 
+  function scheduleRelationshipSummary(payload = {}) {
+    setTimeout(() => {
+      withGateway((client) => persistRelationshipSummary(client, payload))
+        .catch((error) => {
+          console.error(`AgentSquared relationship memory update failed: ${clean(error?.message) || 'unknown error'}`)
+        })
+    }, 0).unref?.()
+  }
+
   async function executeInbound({
     item,
     selectedSkill,
@@ -219,49 +228,62 @@ export function createOpenClawAdapter({
     const conversationIdentity = resolveInboundConversationIdentity(item)
     const conversationKey = clean(conversationIdentity.conversationKey)
     return withGateway(async (client, gatewayContext) => {
-      const safetySessionKey = normalizeOpenClawSafetySessionKey(localAgentId, remoteAgentId || mailboxKey || 'unknown')
-      const safetyPrompt = buildOpenClawSafetyPrompt({
-        localAgentId,
-        remoteAgentId,
-        selectedSkill,
-        item
+      const trustedSafety = assessTrustedFriendInboundSafety({
+        text: inboundText,
+        originalOwnerText: displayInboundText,
+        conversationKey
       })
-      let safetyAccepted
-      try {
-        safetyAccepted = await client.request('agent', {
-          agentId: agentName,
-          sessionKey: safetySessionKey,
-          message: safetyPrompt,
-          extraSystemPrompt: OPENCLAW_AGENT_SQUARED_NO_TOOLS_PROMPT,
-          idempotencyKey: `agentsquared-safety-${clean(item?.inboundId) || randomId('inbound')}`
-        }, timeoutMs)
-      } catch (error) {
-        throw reframeOpenClawAgentError(error, {
-          openclawAgent: agentName,
-          localAgentId
+      let safety = {
+        action: 'allow',
+        reason: trustedSafety.reason,
+        peerResponse: '',
+        ownerSummary: ''
+      }
+      if (trustedSafety.action === 'escalate') {
+        const safetySessionKey = normalizeOpenClawSafetySessionKey(localAgentId, remoteAgentId || mailboxKey || 'unknown')
+        const safetyPrompt = buildOpenClawSafetyPrompt({
+          localAgentId,
+          remoteAgentId,
+          selectedSkill,
+          item
         })
+        let safetyAccepted
+        try {
+          safetyAccepted = await client.request('agent', {
+            agentId: agentName,
+            sessionKey: safetySessionKey,
+            message: safetyPrompt,
+            extraSystemPrompt: OPENCLAW_AGENT_SQUARED_NO_TOOLS_PROMPT,
+            idempotencyKey: `agentsquared-safety-${clean(item?.inboundId) || randomId('inbound')}`
+          }, timeoutMs)
+        } catch (error) {
+          throw reframeOpenClawAgentError(error, {
+            openclawAgent: agentName,
+            localAgentId
+          })
+        }
+        const safetyRunId = readOpenClawRunId(safetyAccepted)
+        if (!safetyRunId) {
+          throw new Error('OpenClaw safety triage did not return a runId.')
+        }
+        const safetyWaited = await client.request('agent.wait', {
+          runId: safetyRunId,
+          timeoutMs
+        }, timeoutMs + 1000)
+        const safetyStatus = readOpenClawStatus(safetyWaited).toLowerCase()
+        if (safetyStatus && safetyStatus !== 'ok' && safetyStatus !== 'completed' && safetyStatus !== 'done') {
+          throw new Error(`OpenClaw safety triage returned ${safetyStatus || 'an unknown status'} for run ${safetyRunId}.`)
+        }
+        const safetyHistory = await client.request('chat.history', {
+          sessionKey: safetySessionKey,
+          limit: 8
+        }, timeoutMs)
+        const safetyText = latestAssistantText(safetyWaited, { runId: safetyRunId }) || latestAssistantText(safetyHistory, { runId: safetyRunId })
+        if (!safetyText) {
+          throw new Error(`OpenClaw safety triage did not produce a final assistant message for session ${safetySessionKey}.`)
+        }
+        safety = parseOpenClawSafetyResult(safetyText)
       }
-      const safetyRunId = readOpenClawRunId(safetyAccepted)
-      if (!safetyRunId) {
-        throw new Error('OpenClaw safety triage did not return a runId.')
-      }
-      const safetyWaited = await client.request('agent.wait', {
-        runId: safetyRunId,
-        timeoutMs
-      }, timeoutMs + 1000)
-      const safetyStatus = readOpenClawStatus(safetyWaited).toLowerCase()
-      if (safetyStatus && safetyStatus !== 'ok' && safetyStatus !== 'completed' && safetyStatus !== 'done') {
-        throw new Error(`OpenClaw safety triage returned ${safetyStatus || 'an unknown status'} for run ${safetyRunId}.`)
-      }
-      const safetyHistory = await client.request('chat.history', {
-        sessionKey: safetySessionKey,
-        limit: 8
-      }, timeoutMs)
-      const safetyText = latestAssistantText(safetyWaited, { runId: safetyRunId }) || latestAssistantText(safetyHistory, { runId: safetyRunId })
-      if (!safetyText) {
-        throw new Error(`OpenClaw safety triage did not produce a final assistant message for session ${safetySessionKey}.`)
-      }
-      const safety = parseOpenClawSafetyResult(safetyText)
       const budget = consumePeerBudget({
         remoteAgentId
       })
@@ -558,9 +580,8 @@ export function createOpenClawAdapter({
         timeZone: ownerTimeZone,
         localTime: true
       })
-      let relationshipMemoryRunId = ''
       if (conversation.final) {
-        await persistRelationshipSummary(client, {
+        scheduleRelationshipSummary({
           relationSessionKey,
           remoteAgentId,
           selectedSkill: parsed.selectedSkill,
@@ -572,8 +593,6 @@ export function createOpenClawAdapter({
             turn.stopReason ? `Stop Reason: ${turn.stopReason}` : ''
           ].filter(Boolean).join('\n')).join('\n\n') || conversationTranscript,
           ownerSummary: safeOwnerSummary
-        }).then((runId) => {
-          relationshipMemoryRunId = clean(runId)
         })
         conversationStore?.closeConversation?.(updatedConversation?.conversationKey || liveConversation?.conversationKey || conversationKey, safeOwnerSummary)
       }
@@ -610,7 +629,7 @@ export function createOpenClawAdapter({
           openclawRunId: runId,
           openclawSessionKey: sessionKey,
           openclawRelationSessionKey: relationSessionKey,
-          relationshipMemoryRunId,
+          relationshipMemoryRunId: '',
           openclawGatewayUrl: gatewayContext.gatewayUrl,
           turnIndex: conversation.turnIndex,
           decision: conversation.decision,

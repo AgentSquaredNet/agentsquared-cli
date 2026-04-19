@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 
 import { buildReceiverBaseReport, inferOwnerFacingLanguage } from '../../lib/conversation/templates.mjs'
 import { normalizeConversationControl, resolveConversationMaxTurns, resolveInboundConversationIdentity } from '../../lib/conversation/policy.mjs'
-import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
+import { assessTrustedFriendInboundSafety, scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import { checkHermesApiServerHealth, postHermesResponse } from './api_client.mjs'
 import { buildHermesProcessEnv } from './common.mjs'
 import { hermesProjectRoot, hermesPythonPath, readHermesChannelDirectory } from './common.mjs'
@@ -400,22 +400,35 @@ export function createHermesAdapter({
       }
     }
 
-    const safetyPayload = await postHermesResponse({
-      apiBase: detection.apiBase,
-      envVars,
-      hermesHome: detection.hermesHome,
-      timeoutMs,
-      instructions: HERMES_STRUCTURED_NO_TOOLS_INSTRUCTIONS,
-      noTools: true,
-      conversation: hermesConversationName('agentsquared:safety', localAgentId, remoteAgentId || mailboxKey || 'unknown'),
-      input: buildHermesSafetyPrompt({
-        localAgentId,
-        remoteAgentId,
-        selectedSkill,
-        item
-      })
+    const trustedSafety = assessTrustedFriendInboundSafety({
+      text: inboundText,
+      originalOwnerText: displayInboundText,
+      conversationKey
     })
-    const safety = parseHermesSafetyResult(safetyPayload)
+    let safety = {
+      action: 'allow',
+      reason: trustedSafety.reason,
+      peerResponse: '',
+      ownerSummary: ''
+    }
+    if (trustedSafety.action === 'escalate') {
+      const safetyPayload = await postHermesResponse({
+        apiBase: detection.apiBase,
+        envVars,
+        hermesHome: detection.hermesHome,
+        timeoutMs,
+        instructions: HERMES_STRUCTURED_NO_TOOLS_INSTRUCTIONS,
+        noTools: true,
+        conversation: hermesConversationName('agentsquared:safety', localAgentId, remoteAgentId || mailboxKey || 'unknown'),
+        input: buildHermesSafetyPrompt({
+          localAgentId,
+          remoteAgentId,
+          selectedSkill,
+          item
+        })
+      })
+      safety = parseHermesSafetyResult(safetyPayload)
+    }
     if (safety.action !== 'allow') {
       const safetyStopReason = 'safety-block'
       const peerReplyText = scrubOutboundText(clean(safety.peerResponse))
