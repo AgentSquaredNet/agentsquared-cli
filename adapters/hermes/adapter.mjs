@@ -149,10 +149,11 @@ function parseLastJsonLine(stdout = '') {
 }
 
 function runHermesPythonJson(hermesHome = '', script = '', {
+  command = 'hermes',
   timeoutMs = 10000
 } = {}) {
-  const pythonPath = hermesPythonPath(hermesHome)
-  const projectRoot = hermesProjectRoot(hermesHome)
+  const pythonPath = hermesPythonPath(hermesHome, command)
+  const projectRoot = hermesProjectRoot(hermesHome, command)
   const env = {
     ...buildHermesProcessEnv({ hermesHome }),
     ...readHermesEnv(hermesHome)
@@ -170,6 +171,7 @@ function runHermesPythonJson(hermesHome = '', script = '', {
 }
 
 function listRecentHermesExportedSessions(hermesHome = '', {
+  command = 'hermes',
   limit = 12
 } = {}) {
   const safeLimit = Math.max(1, Math.min(50, Number.parseInt(`${limit}`, 10) || 12))
@@ -189,17 +191,19 @@ function listRecentHermesExportedSessions(hermesHome = '', {
     '        out.append(exported)',
     'print(json.dumps(out, ensure_ascii=False))'
   ].join('\n')
-  const payload = runHermesPythonJson(hermesHome, script, { timeoutMs: 10000 })
+  const payload = runHermesPythonJson(hermesHome, script, { command, timeoutMs: 10000 })
   return Array.isArray(payload) ? payload : []
 }
 
-function loadHermesChannelDirectory(hermesHome = '') {
+function loadHermesChannelDirectory(hermesHome = '', {
+  command = 'hermes'
+} = {}) {
   const script = [
     'import json',
     'from gateway.channel_directory import load_directory',
     'print(json.dumps(load_directory(), ensure_ascii=False))'
   ].join('\n')
-  const payload = runHermesPythonJson(hermesHome, script, { timeoutMs: 10000 })
+  const payload = runHermesPythonJson(hermesHome, script, { command, timeoutMs: 10000 })
   return payload && typeof payload === 'object' && !Array.isArray(payload)
     ? payload
     : { updated_at: null, platforms: {} }
@@ -219,12 +223,14 @@ function hermesChannelTargetName(platform = '', entry = {}) {
   return name
 }
 
-function resolveHermesSendMessageTargetForSource(hermesHome = '', source = '') {
+function resolveHermesSendMessageTargetForSource(hermesHome = '', source = '', {
+  command = 'hermes'
+} = {}) {
   const normalizedSource = clean(source).toLowerCase()
   if (!normalizedSource) {
     return ''
   }
-  const directory = loadHermesChannelDirectory(hermesHome)
+  const directory = loadHermesChannelDirectory(hermesHome, { command })
   const entries = Array.isArray(directory?.platforms?.[normalizedSource])
     ? directory.platforms[normalizedSource]
     : []
@@ -233,11 +239,13 @@ function resolveHermesSendMessageTargetForSource(hermesHome = '', source = '') {
   return targetName ? `${normalizedSource}:${targetName}` : ''
 }
 
-export function resolveHermesOwnerTarget(hermesHome = '') {
-  for (const session of listRecentHermesExportedSessions(hermesHome)) {
+export function resolveHermesOwnerTarget(hermesHome = '', {
+  command = 'hermes'
+} = {}) {
+  for (const session of listRecentHermesExportedSessions(hermesHome, { command })) {
     const source = clean(session?.source).toLowerCase()
     if (source && !HERMES_INTERNAL_SESSION_SOURCES.has(source)) {
-      const exactTarget = resolveHermesSendMessageTargetForSource(hermesHome, source)
+      const exactTarget = resolveHermesSendMessageTargetForSource(hermesHome, source, { command })
       return {
         target: exactTarget || source,
         source: 'hermes-sessiondb-export',
@@ -267,6 +275,7 @@ export function resolveHermesOwnerTarget(hermesHome = '') {
 
 function sendHermesOwnerMessage({
   hermesHome = '',
+  command = 'hermes',
   target = '',
   message = '',
   timeoutMs = Number.parseInt(process.env.A2_HERMES_OWNER_REPORT_TIMEOUT_MS ?? '30000', 10) || 30000
@@ -281,8 +290,8 @@ function sendHermesOwnerMessage({
     }
   }
 
-  const pythonPath = hermesPythonPath(hermesHome)
-  const projectRoot = hermesProjectRoot(hermesHome)
+  const pythonPath = hermesPythonPath(hermesHome, command)
+  const projectRoot = hermesProjectRoot(hermesHome, command)
   const env = {
     ...buildHermesProcessEnv({ hermesHome }),
     ...readHermesEnv(hermesHome)
@@ -828,7 +837,10 @@ export function createHermesAdapter({
     }
     return retryTransientHermesRuntime(async () => {
       const detection = await detectCurrent()
-      const target = resolveHermesOwnerTarget(detection.hermesHome)
+      const hermesCommand = detection.hermesCommand || command
+      const target = resolveHermesOwnerTarget(detection.hermesHome, {
+        command: hermesCommand
+      })
       if (!target.target) {
         return {
           delivered: false,
@@ -839,6 +851,7 @@ export function createHermesAdapter({
       }
       const delivery = sendHermesOwnerMessage({
         hermesHome: detection.hermesHome,
+        command: hermesCommand,
         target: target.target,
         message: summary
       })

@@ -72,14 +72,135 @@ export function hermesConfigPath(hermesHome = '') {
   return path.join(resolveUserPath(hermesHome || defaultHermesRoot()), 'config.yaml')
 }
 
-export function hermesProjectRoot(hermesHome = '') {
-  return path.join(resolveUserPath(hermesHome || defaultHermesRoot()), 'hermes-agent')
+function existingPath(filePath = '') {
+  const normalized = clean(filePath)
+  if (!normalized) {
+    return ''
+  }
+  const resolved = resolveUserPath(normalized)
+  if (!fs.existsSync(resolved)) {
+    return ''
+  }
+  try {
+    return fs.realpathSync(resolved)
+  } catch {
+    return resolved
+  }
 }
 
-export function hermesPythonPath(hermesHome = '') {
-  const projectRoot = hermesProjectRoot(hermesHome)
+function looksLikeHermesProjectRoot(dirPath = '') {
+  const root = existingPath(dirPath)
+  return Boolean(
+    root
+    && fs.existsSync(path.join(root, 'hermes_state.py'))
+  )
+}
+
+function resolveCommandPath(command = 'hermes') {
+  const normalized = clean(command) || 'hermes'
+  if (normalized.includes(path.sep)) {
+    return existingPath(normalized)
+  }
+  const result = spawnSync('sh', ['-lc', `command -v ${JSON.stringify(normalized)}`], {
+    encoding: 'utf8'
+  })
+  return existingPath(clean(result.stdout).split(/\r?\n/).find(Boolean))
+}
+
+function hermesPythonFromCommand(command = 'hermes') {
+  const commandPath = resolveCommandPath(command)
+  if (!commandPath) {
+    return ''
+  }
+  const commandDir = path.dirname(commandPath)
+  const siblingPython = path.join(commandDir, 'python')
+  if (fs.existsSync(siblingPython)) {
+    return siblingPython
+  }
+  try {
+    const firstLine = fs.readFileSync(commandPath, 'utf8').split(/\r?\n/, 1)[0] || ''
+    const shebang = firstLine.match(/^#!(.+?python[^\s]*)/)
+    if (shebang?.[1] && fs.existsSync(shebang[1])) {
+      return shebang[1]
+    }
+  } catch {
+    // not a readable script; fall through to path-derived candidates
+  }
+  return ''
+}
+
+function hermesProjectRootFromPython(pythonPath = '', hermesHome = '') {
+  const python = clean(pythonPath)
+  if (!python) {
+    return ''
+  }
+  const result = spawnSync(python, ['-c', [
+    'import json, pathlib',
+    'import hermes_state',
+    'print(json.dumps(str(pathlib.Path(hermes_state.__file__).resolve().parent)))'
+  ].join('; ')], {
+    env: buildHermesProcessEnv({ hermesHome }),
+    encoding: 'utf8',
+    timeout: 5000
+  })
+  if (result.status !== 0 || result.error) {
+    return ''
+  }
+  try {
+    const root = JSON.parse(clean(result.stdout))
+    return looksLikeHermesProjectRoot(root) ? root : ''
+  } catch {
+    return ''
+  }
+}
+
+function hermesProjectRootFromCommand(command = 'hermes', hermesHome = '') {
+  const commandPath = resolveCommandPath(command)
+  const candidates = []
+  if (commandPath) {
+    const commandDir = path.dirname(commandPath)
+    candidates.push(path.resolve(commandDir, '..', '..'))
+    candidates.push(path.resolve(commandDir, '..', '..', '..'))
+    candidates.push(commandDir)
+  }
+  for (const candidate of candidates) {
+    if (looksLikeHermesProjectRoot(candidate)) {
+      return existingPath(candidate)
+    }
+  }
+  return hermesProjectRootFromPython(hermesPythonFromCommand(command), hermesHome)
+}
+
+export function hermesProjectRoot(hermesHome = '', command = 'hermes') {
+  const envRoot = existingPath(process.env.HERMES_PROJECT_ROOT || process.env.HERMES_AGENT_ROOT)
+  if (looksLikeHermesProjectRoot(envRoot)) {
+    return envRoot
+  }
+
+  const homeRoot = path.join(resolveUserPath(hermesHome || defaultHermesRoot()), 'hermes-agent')
+  if (looksLikeHermesProjectRoot(homeRoot)) {
+    return existingPath(homeRoot)
+  }
+
+  const commandRoot = hermesProjectRootFromCommand(command, hermesHome)
+  if (commandRoot) {
+    return commandRoot
+  }
+
+  return homeRoot
+}
+
+export function hermesPythonPath(hermesHome = '', command = 'hermes') {
+  const explicitPython = existingPath(process.env.HERMES_PYTHON)
+  if (explicitPython) {
+    return explicitPython
+  }
+  const projectRoot = hermesProjectRoot(hermesHome, command)
   const venvPython = path.join(projectRoot, 'venv', 'bin', 'python')
-  return fs.existsSync(venvPython) ? venvPython : 'python3'
+  if (fs.existsSync(venvPython)) {
+    return venvPython
+  }
+  return hermesPythonFromCommand(command) || 'python3'
 }
 
 export function hermesChannelDirectoryPath(hermesHome = '') {

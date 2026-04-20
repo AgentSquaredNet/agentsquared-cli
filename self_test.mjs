@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { resolveHermesOwnerTarget } from './adapters/hermes/adapter.mjs'
+import { hermesProjectRoot } from './adapters/hermes/common.mjs'
 import { buildReceiverBaseReport, buildSenderBaseReport, renderConversationDetails } from './lib/conversation/templates.mjs'
 import { createInboxStore } from './lib/gateway/inbox.mjs'
 
@@ -176,6 +177,20 @@ try {
   assert(route.targetSource === 'channel-directory', 'Hermes owner target should record structured channel directory source')
 } finally {
   fs.rmSync(hermesHome, { recursive: true, force: true })
+}
+
+const hermesInstall = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-hermes-install-'))
+try {
+  const projectRoot = path.join(hermesInstall, 'custom-hermes-agent')
+  const binDir = path.join(projectRoot, 'venv', 'bin')
+  fs.mkdirSync(binDir, { recursive: true })
+  fs.writeFileSync(path.join(projectRoot, 'hermes_state.py'), '', 'utf8')
+  const hermesBin = path.join(binDir, 'hermes')
+  fs.writeFileSync(hermesBin, '#!/bin/sh\nexit 0\n', 'utf8')
+  fs.chmodSync(hermesBin, 0o755)
+  assert(hermesProjectRoot(path.join(hermesInstall, 'home-without-source'), hermesBin) === fs.realpathSync(projectRoot), 'Hermes project root should be discoverable from a custom hermes command path')
+} finally {
+  fs.rmSync(hermesInstall, { recursive: true, force: true })
 }
 
 console.log('AgentSquared CLI self-test ok')
