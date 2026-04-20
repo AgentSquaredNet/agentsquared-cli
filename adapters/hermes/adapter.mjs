@@ -5,7 +5,7 @@ import { normalizeConversationControl, resolveConversationMaxTurns, resolveInbou
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import { checkHermesApiServerHealth, extractHermesResponseText, postHermesResponse } from './api_client.mjs'
 import { buildHermesProcessEnv } from './common.mjs'
-import { hermesProjectRoot, hermesPythonPath, readHermesChannelDirectory } from './common.mjs'
+import { hermesProjectRoot, hermesPythonPath } from './common.mjs'
 import { detectHermesHostEnvironment } from './detect.mjs'
 import { readHermesEnv } from './env.mjs'
 import { ensureHermesApiServerEnv } from './env.mjs'
@@ -115,65 +115,160 @@ function runHermesGatewayService(command, {
   })
 }
 
-function resolveHermesOwnerTarget(hermesHome = '') {
-  const envVars = readHermesEnv(hermesHome)
-  const configuredHomeTargets = [
-    ['feishu', clean(envVars.FEISHU_HOME_CHANNEL)],
-    ['wecom', clean(envVars.WECOM_HOME_CHANNEL)],
-    ['weixin', clean(envVars.WEIXIN_HOME_CHANNEL)],
-    ['telegram', clean(envVars.TELEGRAM_HOME_CHANNEL)],
-    ['discord', clean(envVars.DISCORD_HOME_CHANNEL)],
-    ['slack', clean(envVars.SLACK_HOME_CHANNEL)],
-    ['signal', clean(envVars.SIGNAL_HOME_CHANNEL)],
-    ['whatsapp', clean(envVars.WHATSAPP_HOME_CHANNEL)],
-    ['email', clean(envVars.EMAIL_HOME_ADDRESS)],
-    ['sms', clean(envVars.SMS_HOME_CHANNEL)],
-    ['matrix', clean(envVars.MATRIX_HOME_CHANNEL)],
-    ['mattermost', clean(envVars.MATTERMOST_HOME_CHANNEL)],
-    ['dingtalk', clean(envVars.DINGTALK_HOME_CHANNEL)],
-    ['qqbot', clean(envVars.QQBOT_HOME_CHANNEL)],
-    ['bluebubbles', clean(envVars.BLUEBUBBLES_HOME_CHANNEL)]
-  ]
-  for (const [platform, chatId] of configuredHomeTargets) {
-    if (chatId) {
+const HERMES_OWNER_TARGET_ENV = [
+  ['feishu', 'FEISHU_HOME_CHANNEL'],
+  ['wecom', 'WECOM_HOME_CHANNEL'],
+  ['weixin', 'WEIXIN_HOME_CHANNEL'],
+  ['telegram', 'TELEGRAM_HOME_CHANNEL'],
+  ['discord', 'DISCORD_HOME_CHANNEL'],
+  ['slack', 'SLACK_HOME_CHANNEL'],
+  ['signal', 'SIGNAL_HOME_CHANNEL'],
+  ['whatsapp', 'WHATSAPP_HOME_CHANNEL'],
+  ['email', 'EMAIL_HOME_ADDRESS'],
+  ['sms', 'SMS_HOME_CHANNEL'],
+  ['matrix', 'MATRIX_HOME_CHANNEL'],
+  ['mattermost', 'MATTERMOST_HOME_CHANNEL'],
+  ['dingtalk', 'DINGTALK_HOME_CHANNEL'],
+  ['qqbot', 'QQBOT_HOME_CHANNEL'],
+  ['bluebubbles', 'BLUEBUBBLES_HOME_CHANNEL']
+]
+
+const HERMES_INTERNAL_SESSION_SOURCES = new Set(['cli', 'tool', 'local', 'api', 'api_server', 'webhook'])
+
+function parseHermesSessionListIds(output = '') {
+  return `${output ?? ''}`
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !line.startsWith('Title') && !line.startsWith('Preview') && !/^[-\u2500]+$/.test(line))
+    .map((line) => clean(line.split(/\s+/).at(-1)))
+    .filter(Boolean)
+}
+
+function hermesSessionsCommand(command = 'hermes', args = [], {
+  hermesHome = '',
+  timeoutMs = 5000
+} = {}) {
+  return spawnSync(command, ['sessions', ...args], {
+    env: buildHermesProcessEnv({ hermesHome }),
+    encoding: 'utf8',
+    timeout: Math.max(500, timeoutMs)
+  })
+}
+
+function listRecentHermesSessionIds(command = 'hermes', {
+  hermesHome = '',
+  limit = 12
+} = {}) {
+  const result = hermesSessionsCommand(command, ['list', '--limit', `${Math.max(1, limit)}`], { hermesHome })
+  if (result.status !== 0 || result.error) {
+    return []
+  }
+  return parseHermesSessionListIds(result.stdout)
+}
+
+function exportHermesSession(command = 'hermes', sessionId = '', {
+  hermesHome = ''
+} = {}) {
+  const normalizedSessionId = clean(sessionId)
+  if (!normalizedSessionId) {
+    return null
+  }
+  const result = hermesSessionsCommand(command, ['export', '-', '--session-id', normalizedSessionId], {
+    hermesHome,
+    timeoutMs: 10000
+  })
+  if (result.status !== 0 || result.error) {
+    return null
+  }
+  const line = clean(result.stdout).split(/\r?\n/).map((item) => item.trim()).find(Boolean)
+  if (!line) {
+    return null
+  }
+  try {
+    return JSON.parse(line)
+  } catch {
+    return null
+  }
+}
+
+function listHermesSendMessageTargets(hermesHome = '') {
+  const pythonPath = hermesPythonPath(hermesHome)
+  const projectRoot = hermesProjectRoot(hermesHome)
+  const env = {
+    ...buildHermesProcessEnv({ hermesHome }),
+    ...readHermesEnv(hermesHome)
+  }
+  const script = [
+    'import json',
+    'from tools.send_message_tool import send_message_tool',
+    'print(send_message_tool({"action": "list"}))'
+  ].join('\n')
+  const result = spawnSync(pythonPath, ['-c', script], {
+    cwd: projectRoot,
+    env,
+    encoding: 'utf8',
+    timeout: 10000
+  })
+  if (result.status !== 0 || result.error) {
+    return []
+  }
+  try {
+    const payload = JSON.parse(clean(result.stdout) || '{}')
+    const lines = `${payload?.targets ?? ''}`.split(/\r?\n/)
+    return lines.map((line) => {
+      const match = line.match(/^\s+([a-z0-9_]+:[^\s].*?)(?:\s+\([^)]+\))?\s*$/i)
+      if (!match) {
+        return null
+      }
+      const target = clean(match[1])
+      const platform = clean(target.split(':', 1)[0]).toLowerCase()
+      return platform && target ? { platform, target } : null
+    }).filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+function resolveHermesSendMessageTargetForSource(hermesHome = '', source = '') {
+  const normalizedSource = clean(source).toLowerCase()
+  if (!normalizedSource) {
+    return ''
+  }
+  const targets = listHermesSendMessageTargets(hermesHome)
+  const exact = targets.find((entry) => entry.platform === normalizedSource && entry.target.startsWith(`${normalizedSource}:`))
+  return clean(exact?.target)
+}
+
+export function resolveHermesOwnerTarget(hermesHome = '', {
+  command = 'hermes'
+} = {}) {
+  for (const sessionId of listRecentHermesSessionIds(command, { hermesHome })) {
+    const session = exportHermesSession(command, sessionId, { hermesHome })
+    const source = clean(session?.source).toLowerCase()
+    if (source && !HERMES_INTERNAL_SESSION_SOURCES.has(source)) {
+      const exactTarget = resolveHermesSendMessageTargetForSource(hermesHome, source)
       return {
-        target: `${platform}:${chatId}`,
+        target: exactTarget || source,
+        source: 'hermes-session-export',
+        sessionId,
+        sessionSource: source,
+        targetSource: exactTarget ? 'send-message-list' : 'platform-home'
+      }
+    }
+  }
+
+  const envVars = readHermesEnv(hermesHome)
+  for (const [platform, envKey] of HERMES_OWNER_TARGET_ENV) {
+    const configuredTarget = clean(envVars[envKey])
+    if (configuredTarget) {
+      return {
+        target: `${platform}:${configuredTarget}`,
         source: `${platform}-home-channel`
       }
     }
   }
 
-  const directory = readHermesChannelDirectory(hermesHome)
-  const platforms = directory?.platforms && typeof directory.platforms === 'object'
-    ? directory.platforms
-    : {}
-  const preferredPlatforms = [
-    'feishu',
-    'wecom',
-    'weixin',
-    'telegram',
-    'discord',
-    'slack',
-    'signal',
-    'whatsapp',
-    'email',
-    'sms',
-    'matrix',
-    'mattermost',
-    'dingtalk',
-    'qqbot',
-    'bluebubbles'
-  ]
-  for (const platform of preferredPlatforms) {
-    const entries = Array.isArray(platforms?.[platform]) ? platforms[platform] : []
-    const first = entries.find((entry) => clean(entry?.id))
-    if (first) {
-      return {
-        target: `${platform}:${clean(first.id)}`,
-        source: `${platform}-channel-directory`
-      }
-    }
-  }
   return {
     target: '',
     source: 'none'
@@ -743,7 +838,9 @@ export function createHermesAdapter({
     }
     return retryTransientHermesRuntime(async () => {
       const detection = await detectCurrent()
-      const target = resolveHermesOwnerTarget(detection.hermesHome)
+      const target = resolveHermesOwnerTarget(detection.hermesHome, {
+        command: detection.hermesCommand || command
+      })
       if (!target.target) {
         return {
           delivered: false,
@@ -761,7 +858,8 @@ export function createHermesAdapter({
         ...delivery,
         mode: 'hermes',
         ownerRoute: target.target,
-        ownerRouteSource: target.source
+        ownerRouteSource: target.source,
+        ownerRouteSessionId: target.sessionId || ''
       }
     }, { stage: 'Hermes owner report' })
   }

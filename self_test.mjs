@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import { resolveHermesOwnerTarget } from './adapters/hermes/adapter.mjs'
 import { buildReceiverBaseReport, buildSenderBaseReport, renderConversationDetails } from './lib/conversation/templates.mjs'
 import { createInboxStore } from './lib/gateway/inbox.mjs'
 
@@ -143,6 +144,32 @@ const store = createInboxStore({ inboxDir })
   assert(store.findConversation('conversation_inbound_smoke')?.finalEntry?.ownerReport?.conversationKey === 'conversation_inbound_smoke', 'receiver conversation lookup failed')
 } finally {
   fs.rmSync(inboxDir, { recursive: true, force: true })
+}
+
+const hermesHome = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-hermes-session-export-'))
+try {
+  fs.writeFileSync(path.join(hermesHome, '.env'), 'FEISHU_HOME_CHANNEL=oc_should_not_win\nTELEGRAM_HOME_CHANNEL=-1001\n', 'utf8')
+  const fakeHermes = path.join(hermesHome, 'fake-hermes')
+  fs.writeFileSync(fakeHermes, [
+    '#!/bin/sh',
+    'if [ "$1" = "sessions" ] && [ "$2" = "list" ]; then',
+    '  echo "Title                            Preview                                  Last Active   ID"',
+    '  echo "──────────────────────────────────────────────────────────────────────────────────────────────────────────────"',
+    '  echo "Owner chat                       please use a2                            1m ago        20260420_owner"',
+    '  exit 0',
+    'fi',
+    'if [ "$1" = "sessions" ] && [ "$2" = "export" ]; then',
+    '  echo \'{"id":"20260420_owner","source":"telegram","user_id":"123","messages":[]}\'',
+    '  exit 0',
+    'fi',
+    'exit 1'
+  ].join('\n'), 'utf8')
+  fs.chmodSync(fakeHermes, 0o755)
+  const route = resolveHermesOwnerTarget(hermesHome, { command: fakeHermes })
+  assert(route.target === 'telegram', 'Hermes owner target should come from sessions export source before Feishu fallback')
+  assert(route.source === 'hermes-session-export', 'Hermes owner target should record session export source')
+} finally {
+  fs.rmSync(hermesHome, { recursive: true, force: true })
 }
 
 console.log('AgentSquared CLI self-test ok')
