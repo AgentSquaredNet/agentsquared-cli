@@ -135,53 +135,9 @@ const HERMES_OWNER_TARGET_ENV = [
 
 const HERMES_INTERNAL_SESSION_SOURCES = new Set(['cli', 'tool', 'local', 'api', 'api_server', 'webhook'])
 
-function parseHermesSessionListIds(output = '') {
-  return `${output ?? ''}`
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !line.startsWith('Title') && !line.startsWith('Preview') && !/^[-\u2500]+$/.test(line))
-    .map((line) => clean(line.split(/\s+/).at(-1)))
-    .filter(Boolean)
-}
-
-function hermesSessionsCommand(command = 'hermes', args = [], {
-  hermesHome = '',
-  timeoutMs = 5000
-} = {}) {
-  return spawnSync(command, ['sessions', ...args], {
-    env: buildHermesProcessEnv({ hermesHome }),
-    encoding: 'utf8',
-    timeout: Math.max(500, timeoutMs)
-  })
-}
-
-function listRecentHermesSessionIds(command = 'hermes', {
-  hermesHome = '',
-  limit = 12
-} = {}) {
-  const result = hermesSessionsCommand(command, ['list', '--limit', `${Math.max(1, limit)}`], { hermesHome })
-  if (result.status !== 0 || result.error) {
-    return []
-  }
-  return parseHermesSessionListIds(result.stdout)
-}
-
-function exportHermesSession(command = 'hermes', sessionId = '', {
-  hermesHome = ''
-} = {}) {
-  const normalizedSessionId = clean(sessionId)
-  if (!normalizedSessionId) {
-    return null
-  }
-  const result = hermesSessionsCommand(command, ['export', '-', '--session-id', normalizedSessionId], {
-    hermesHome,
-    timeoutMs: 10000
-  })
-  if (result.status !== 0 || result.error) {
-    return null
-  }
-  const line = clean(result.stdout).split(/\r?\n/).map((item) => item.trim()).find(Boolean)
+function parseLastJsonLine(stdout = '') {
+  const lines = `${stdout ?? ''}`.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const line = [...lines].reverse().find((item) => item.startsWith('{') || item.startsWith('['))
   if (!line) {
     return null
   }
@@ -192,32 +148,61 @@ function exportHermesSession(command = 'hermes', sessionId = '', {
   }
 }
 
-function loadHermesChannelDirectory(hermesHome = '') {
+function runHermesPythonJson(hermesHome = '', script = '', {
+  timeoutMs = 10000
+} = {}) {
   const pythonPath = hermesPythonPath(hermesHome)
   const projectRoot = hermesProjectRoot(hermesHome)
   const env = {
     ...buildHermesProcessEnv({ hermesHome }),
     ...readHermesEnv(hermesHome)
   }
+  const result = spawnSync(pythonPath, ['-c', script], {
+    cwd: projectRoot,
+    env,
+    encoding: 'utf8',
+    timeout: Math.max(500, timeoutMs)
+  })
+  if (result.status !== 0 || result.error) {
+    return null
+  }
+  return parseLastJsonLine(result.stdout)
+}
+
+function listRecentHermesExportedSessions(hermesHome = '', {
+  limit = 12
+} = {}) {
+  const safeLimit = Math.max(1, Math.min(50, Number.parseInt(`${limit}`, 10) || 12))
+  const script = [
+    'import json',
+    'from hermes_state import SessionDB',
+    'db = SessionDB()',
+    'sessions = db.list_sessions_rich(exclude_sources=["tool"], limit=' + safeLimit + ')',
+    'out = []',
+    'for session in sessions:',
+    '    raw_id = str(session.get("id", "")).strip()',
+    '    if not raw_id:',
+    '        continue',
+    '    resolved_id = db.resolve_session_id(raw_id) or raw_id',
+    '    exported = db.export_session(resolved_id)',
+    '    if exported:',
+    '        out.append(exported)',
+    'print(json.dumps(out, ensure_ascii=False))'
+  ].join('\n')
+  const payload = runHermesPythonJson(hermesHome, script, { timeoutMs: 10000 })
+  return Array.isArray(payload) ? payload : []
+}
+
+function loadHermesChannelDirectory(hermesHome = '') {
   const script = [
     'import json',
     'from gateway.channel_directory import load_directory',
     'print(json.dumps(load_directory(), ensure_ascii=False))'
   ].join('\n')
-  const result = spawnSync(pythonPath, ['-c', script], {
-    cwd: projectRoot,
-    env,
-    encoding: 'utf8',
-    timeout: 10000
-  })
-  if (result.status !== 0 || result.error) {
-    return []
-  }
-  try {
-    return JSON.parse(clean(result.stdout) || '{}')
-  } catch {
-    return { updated_at: null, platforms: {} }
-  }
+  const payload = runHermesPythonJson(hermesHome, script, { timeoutMs: 10000 })
+  return payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload
+    : { updated_at: null, platforms: {} }
 }
 
 function hermesChannelTargetName(platform = '', entry = {}) {
@@ -248,18 +233,15 @@ function resolveHermesSendMessageTargetForSource(hermesHome = '', source = '') {
   return targetName ? `${normalizedSource}:${targetName}` : ''
 }
 
-export function resolveHermesOwnerTarget(hermesHome = '', {
-  command = 'hermes'
-} = {}) {
-  for (const sessionId of listRecentHermesSessionIds(command, { hermesHome })) {
-    const session = exportHermesSession(command, sessionId, { hermesHome })
+export function resolveHermesOwnerTarget(hermesHome = '') {
+  for (const session of listRecentHermesExportedSessions(hermesHome)) {
     const source = clean(session?.source).toLowerCase()
     if (source && !HERMES_INTERNAL_SESSION_SOURCES.has(source)) {
       const exactTarget = resolveHermesSendMessageTargetForSource(hermesHome, source)
       return {
         target: exactTarget || source,
-        source: 'hermes-session-export',
-        sessionId,
+        source: 'hermes-sessiondb-export',
+        sessionId: clean(session?.id),
         sessionSource: source,
         targetSource: exactTarget ? 'channel-directory' : 'platform-home'
       }
@@ -846,9 +828,7 @@ export function createHermesAdapter({
     }
     return retryTransientHermesRuntime(async () => {
       const detection = await detectCurrent()
-      const target = resolveHermesOwnerTarget(detection.hermesHome, {
-        command: detection.hermesCommand || command
-      })
+      const target = resolveHermesOwnerTarget(detection.hermesHome)
       if (!target.target) {
         return {
           delivered: false,

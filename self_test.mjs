@@ -161,25 +161,18 @@ try {
     '        }',
     '    }'
   ].join('\n'), 'utf8')
-  const fakeHermes = path.join(hermesHome, 'fake-hermes')
-  fs.writeFileSync(fakeHermes, [
-    '#!/bin/sh',
-    'if [ "$1" = "sessions" ] && [ "$2" = "list" ]; then',
-    '  echo "Title                            Preview                                  Last Active   ID"',
-    '  echo "──────────────────────────────────────────────────────────────────────────────────────────────────────────────"',
-    '  echo "Owner chat                       please use a2                            1m ago        20260420_owner"',
-    '  exit 0',
-    'fi',
-    'if [ "$1" = "sessions" ] && [ "$2" = "export" ]; then',
-    '  echo \'{"id":"20260420_owner","source":"telegram","user_id":"123","messages":[]}\'',
-    '  exit 0',
-    'fi',
-    'exit 1'
+  fs.writeFileSync(path.join(hermesProjectRoot, 'hermes_state.py'), [
+    'class SessionDB:',
+    '    def list_sessions_rich(self, exclude_sources=None, limit=20):',
+    '        return [{"id": "20260420_owner", "source": "telegram"}]',
+    '    def resolve_session_id(self, session_id):',
+    '        return session_id',
+    '    def export_session(self, session_id):',
+    '        return {"id": session_id, "source": "telegram", "user_id": "123", "messages": []}'
   ].join('\n'), 'utf8')
-  fs.chmodSync(fakeHermes, 0o755)
-  const route = resolveHermesOwnerTarget(hermesHome, { command: fakeHermes })
+  const route = resolveHermesOwnerTarget(hermesHome)
   assert(route.target === 'telegram:Owner Chat (dm)', 'Hermes owner target should use structured channel directory fields before Feishu fallback')
-  assert(route.source === 'hermes-session-export', 'Hermes owner target should record session export source')
+  assert(route.source === 'hermes-sessiondb-export', 'Hermes owner target should record SessionDB export source')
   assert(route.targetSource === 'channel-directory', 'Hermes owner target should record structured channel directory source')
 } finally {
   fs.rmSync(hermesHome, { recursive: true, force: true })

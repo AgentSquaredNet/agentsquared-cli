@@ -136,7 +136,7 @@ Useful reliability option:
 
 - `--friend-msg-wait-ms <ms>` limits how long the CLI waits for the local gateway to return a confirmed peer result for one-turn workflows. Multi-turn workflows are normally handed to the local gateway job runner, which owns the full bounded exchange and sends only the final owner notification through the owner channel. Use `--friend-msg-sync true` only for debugging when you explicitly need foreground execution.
 - If the peer replies after the CLI command has already returned, the local A2 gateway records the reply in the local inbox and pushes the official owner notification instead of asking the host agent to poll for it.
-- Hermes owner-notification delivery resolves the latest non-internal Hermes session with `hermes sessions list` / `hermes sessions export`, maps that session `source` through Hermes' structured channel directory, then sends with Hermes' official `send_message_tool(action="send")`.
+- Hermes owner-notification delivery resolves the latest non-internal Hermes session through Hermes' official `SessionDB.list_sessions_rich()` / `export_session()` APIs, maps that session `source` through Hermes' structured channel directory, then sends with Hermes' official `send_message_tool(action="send")`.
 
 Owner notification behavior:
 
