@@ -14,6 +14,7 @@ import { getFriendDirectory } from './lib/transport/relay_http.mjs'
 import { generateRuntimeKeyBundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
 import { runGateway } from './lib/gateway/server.mjs'
 import { SUPPORTED_HOST_RUNTIMES, createHostRuntimeAdapter, detectHostRuntimeEnvironment } from './adapters/index.mjs'
+import { resolveHermesOwnerTarget } from './adapters/hermes/adapter.mjs'
 import { resolveOpenClawAgentSelection } from './adapters/openclaw/detect.mjs'
 import {
   defaultGatewayLogFile,
@@ -617,6 +618,39 @@ async function createCliLocalRuntimeExecutor({
     hermesApiBase: hostContext.hermesApiBase,
     hermesTimeoutMs: hostContext.hermesTimeoutMs
   })
+}
+
+async function resolveCliOwnerRouteSnapshot({
+  agentId,
+  keyFile,
+  args
+} = {}) {
+  try {
+    const hostContext = await resolveCliHostContext({
+      agentId,
+      keyFile,
+      args,
+      purpose: 'AgentSquared owner route snapshot'
+    })
+    if (hostContext.resolvedHostRuntime !== 'hermes') {
+      return null
+    }
+    const route = resolveHermesOwnerTarget(hostContext.hermesHome, {
+      command: hostContext.hermesCommand
+    })
+    if (!clean(route?.target)) {
+      return null
+    }
+    return {
+      ownerRoute: clean(route.target),
+      ownerRouteSource: clean(route.source),
+      ownerRouteSessionId: clean(route.sessionId),
+      ownerRouteTargetSource: clean(route.targetSource),
+      ownerRouteSessionSource: clean(route.sessionSource)
+    }
+  } catch {
+    return null
+  }
 }
 
 async function executeLocalConversationTurn({
@@ -1546,6 +1580,13 @@ async function commandFriendMessage(args) {
   const conversationKey = randomRequestId('conversation')
   const sentAt = new Date().toISOString()
   const ownerNotificationDedupeKey = stableDedupeKey(['friend-msg', context.agentId, targetAgentId, skillHint, conversationKey, text])
+  const ownerRouteSnapshot = shouldUseGatewayJob
+    ? await resolveCliOwnerRouteSnapshot({
+        agentId: context.agentId,
+        keyFile: context.keyFile,
+        args
+      })
+    : null
   const outboundText = buildSkillOutboundText({
     localAgentId: context.agentId,
     targetAgentId,
@@ -1589,7 +1630,8 @@ async function commandFriendMessage(args) {
           ownerLanguage,
           ownerTimeZone,
           dedupeKey: ownerNotificationDedupeKey,
-          startedAt: sentAt
+          startedAt: sentAt,
+          ...(ownerRouteSnapshot ?? {})
         }
       },
       {

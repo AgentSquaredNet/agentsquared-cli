@@ -172,23 +172,25 @@ function runHermesPythonJson(hermesHome = '', script = '', {
 
 function listRecentHermesExportedSessions(hermesHome = '', {
   command = 'hermes',
-  limit = 12
+  limit = 100
 } = {}) {
-  const safeLimit = Math.max(1, Math.min(50, Number.parseInt(`${limit}`, 10) || 12))
+  const safeLimit = Math.max(1, Math.min(200, Number.parseInt(`${limit}`, 10) || 100))
+  const internalSourcesJson = JSON.stringify([...HERMES_INTERNAL_SESSION_SOURCES, 'tool'])
   const script = [
     'import json',
     'from hermes_state import SessionDB',
     'db = SessionDB()',
+    'internal_sources = set(json.loads(' + JSON.stringify(internalSourcesJson) + '))',
     'sessions = db.list_sessions_rich(exclude_sources=["tool"], limit=' + safeLimit + ')',
     'out = []',
     'for session in sessions:',
     '    raw_id = str(session.get("id", "")).strip()',
     '    if not raw_id:',
     '        continue',
-    '    resolved_id = db.resolve_session_id(raw_id) or raw_id',
-    '    exported = db.export_session(resolved_id)',
-    '    if exported:',
-    '        out.append(exported)',
+    '    source = str(session.get("source", "")).strip().lower()',
+    '    if not source or source in internal_sources:',
+    '        continue',
+    '    out.append({"id": raw_id, "source": source})',
     'print(json.dumps(out, ensure_ascii=False))'
   ].join('\n')
   const payload = runHermesPythonJson(hermesHome, script, { command, timeoutMs: 10000 })
@@ -270,6 +272,36 @@ export function resolveHermesOwnerTarget(hermesHome = '', {
   return {
     target: '',
     source: 'none'
+  }
+}
+
+function resolveProvidedHermesOwnerTarget({
+  ownerReport = null,
+  item = null
+} = {}) {
+  const target = clean(
+    ownerReport?.ownerRoute
+    || ownerReport?.ownerTarget
+    || item?.ownerRoute
+    || item?.ownerTarget
+  )
+  if (!target) {
+    return { target: '', source: 'none' }
+  }
+  return {
+    target,
+    source: clean(
+      ownerReport?.ownerRouteSource
+      || ownerReport?.ownerTargetSource
+      || item?.ownerRouteSource
+      || item?.ownerTargetSource
+    ) || 'agentsquared-owner-context',
+    sessionId: clean(
+      ownerReport?.ownerRouteSessionId
+      || ownerReport?.ownerTargetSessionId
+      || item?.ownerRouteSessionId
+      || item?.ownerTargetSessionId
+    )
   }
 }
 
@@ -824,6 +856,7 @@ export function createHermesAdapter({
   }
 
   async function pushOwnerReport({
+    item,
     ownerReport
   } = {}) {
     const summary = scrubOutboundText(ownerReportText(ownerReport))
@@ -838,9 +871,12 @@ export function createHermesAdapter({
     return retryTransientHermesRuntime(async () => {
       const detection = await detectCurrent()
       const hermesCommand = detection.hermesCommand || command
-      const target = resolveHermesOwnerTarget(detection.hermesHome, {
-        command: hermesCommand
-      })
+      const providedTarget = resolveProvidedHermesOwnerTarget({ ownerReport, item })
+      const target = providedTarget.target
+        ? providedTarget
+        : resolveHermesOwnerTarget(detection.hermesHome, {
+            command: hermesCommand
+          })
       if (!target.target) {
         return {
           delivered: false,

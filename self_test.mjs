@@ -177,11 +177,13 @@ try {
   fs.writeFileSync(path.join(hermesProjectRoot, 'hermes_state.py'), [
     'class SessionDB:',
     '    def list_sessions_rich(self, exclude_sources=None, limit=20):',
-    '        return [{"id": "20260420_owner", "source": "telegram"}]',
+    '        rows = [{"id": f"internal_{idx}", "source": "api_server"} for idx in range(30)]',
+    '        rows.append({"id": "20260420_owner", "source": "telegram"})',
+    '        return rows[:limit]',
     '    def resolve_session_id(self, session_id):',
     '        return session_id',
     '    def export_session(self, session_id):',
-    '        return {"id": session_id, "source": "telegram", "user_id": "123", "messages": []}'
+    '        raise AssertionError("owner route resolution should not export full sessions")'
   ].join('\n'), 'utf8')
   const route = resolveHermesOwnerTarget(hermesHome)
   assert(route.target === 'telegram:Owner Chat (dm)', 'Hermes owner target should use structured channel directory fields before Feishu fallback')
