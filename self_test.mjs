@@ -6,11 +6,22 @@ import { resolveHermesOwnerTarget } from './adapters/hermes/adapter.mjs'
 import { hermesProjectRoot } from './adapters/hermes/common.mjs'
 import { buildReceiverBaseReport, buildSenderBaseReport, renderConversationDetails } from './lib/conversation/templates.mjs'
 import { createInboxStore } from './lib/gateway/inbox.mjs'
+import { normalizeAgentSquaredAgentId, parseAgentSquaredAgentId } from './lib/shared/agent_id.mjs'
 
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message)
   }
+}
+
+assert(normalizeAgentSquaredAgentId('A2:Claw@Skiyo') === 'claw@skiyo', 'A2-prefixed AgentSquared ID should normalize to lowercase canonical form')
+assert(normalizeAgentSquaredAgentId('claw@Skiyo') === 'claw@skiyo', 'bare AgentSquared ID should normalize in A2 context')
+assert(parseAgentSquaredAgentId('A2:Claw@Skiyo').platformExplicit === true, 'A2-prefixed AgentSquared ID should record explicit platform context')
+try {
+  normalizeAgentSquaredAgentId('feishu:claw@Skiyo')
+  assert(false, 'communication-channel targets must not be accepted as AgentSquared Agent IDs')
+} catch (error) {
+  assert(String(error?.message || '').includes('AgentSquared ID'), 'wrong validation error for non-A2 channel target')
 }
 
 const turns = [
