@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process'
 
-import { buildReceiverBaseReport, inferOwnerFacingLanguage } from '../../lib/conversation/templates.mjs'
+import { buildConversationSummaryPrompt, buildReceiverBaseReport, inferOwnerFacingLanguage } from '../../lib/conversation/templates.mjs'
 import { normalizeConversationControl, resolveConversationMaxTurns, resolveInboundConversationIdentity } from '../../lib/conversation/policy.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
-import { checkHermesApiServerHealth, postHermesResponse } from './api_client.mjs'
+import { checkHermesApiServerHealth, extractHermesResponseText, postHermesResponse } from './api_client.mjs'
 import { buildHermesProcessEnv } from './common.mjs'
 import { hermesProjectRoot, hermesPythonPath, readHermesChannelDirectory } from './common.mjs'
 import { detectHermesHostEnvironment } from './detect.mjs'
@@ -376,6 +376,36 @@ export function createHermesAdapter({
     }
   }
 
+  async function summarizeConversation(context = {}) {
+    return retryTransientHermesRuntime(async () => {
+      const detection = await detectCurrent()
+      const envVars = readHermesEnv(detection.hermesHome || hermesHome)
+      const payload = await postHermesResponse({
+        apiBase: detection.apiBase,
+        envVars,
+        hermesHome: detection.hermesHome,
+        timeoutMs: Math.min(timeoutMs, 90000),
+        noTools: true,
+        store: false,
+        conversation: hermesConversationName('agentsquared:summary', localAgentId, context.remoteAgentId, context.conversationKey),
+        instructions: [
+          'You are running inside AgentSquared summary generation.',
+          'Do not call tools. Return only the concise owner-facing summary text.'
+        ].join('\n'),
+        input: buildConversationSummaryPrompt({
+          localAgentId,
+          remoteAgentId: context.remoteAgentId,
+          selectedSkill: context.selectedSkill,
+          direction: context.direction,
+          conversationKey: context.conversationKey,
+          turns: context.turns,
+          language: context.language
+        })
+      })
+      return scrubOutboundText(extractHermesResponseText(payload))
+    }, { stage: 'Hermes conversation summary', maxAttempts: 2 })
+  }
+
   async function executeInbound({
     item,
     selectedSkill,
@@ -436,6 +466,7 @@ export function createHermesAdapter({
           skillSummary: `I paused this exchange because the recent peer conversation window was exceeded. Current 10-minute turn count: ${budget.windowTurns}.`,
           conversationTurns: updatedConversation?.turns?.length || conversation.turnIndex,
           stopReason: 'system-error',
+          conversationTurnDetails: updatedConversation?.turns ?? [],
           detailsAvailableInInbox: true,
           remoteSentAt: clean(inboundMetadata.sentAt),
           language: ownerLanguage,
@@ -553,6 +584,7 @@ export function createHermesAdapter({
           skillSummary: clean(parsed.ownerSummary || parsed.ownerReport?.summary),
           conversationTurns: updatedConversation?.turns?.length || conversation.turnIndex,
           stopReason: safetyStopReason,
+          conversationTurnDetails: updatedConversation?.turns ?? [],
           detailsAvailableInInbox: true,
           remoteSentAt: clean(inboundMetadata.sentAt),
           language: ownerLanguage,
@@ -624,6 +656,15 @@ export function createHermesAdapter({
         conversation.turnIndex,
         maxTurnIndexFromOutline(turnOutline)
       ) || 1
+      const summarizedOwnerReport = await summarizeConversation({
+        localAgentId,
+        remoteAgentId,
+        selectedSkill: parsed.selectedSkill,
+        direction: 'inbound',
+        conversationKey,
+        turns: updatedConversation?.turns ?? [],
+        language: inferOwnerFacingLanguage(displayInboundText, safePeerReplyText, safeOwnerSummary)
+      }).catch(() => safeOwnerSummary)
       const ownerReport = buildReceiverBaseReport({
         localAgentId,
         remoteAgentId,
@@ -634,10 +675,11 @@ export function createHermesAdapter({
         inboundText: displayInboundText,
         peerReplyText: safePeerReplyText,
         repliedAt: new Date().toISOString(),
-        skillSummary: safeOwnerSummary,
+        skillSummary: summarizedOwnerReport || safeOwnerSummary,
         conversationTurns: effectiveConversationTurns,
         stopReason: conversation.stopReason,
         turnOutline,
+        conversationTurnDetails: updatedConversation?.turns ?? [],
         detailsAvailableInInbox: true,
         remoteSentAt: clean(inboundMetadata.sentAt),
         language: inferOwnerFacingLanguage(displayInboundText, safePeerReplyText, safeOwnerSummary),
@@ -733,6 +775,7 @@ export function createHermesAdapter({
     apiBase: clean(apiBase),
     preflight,
     executeInbound,
-    pushOwnerReport
+    pushOwnerReport,
+    summarizeConversation
   }
 }

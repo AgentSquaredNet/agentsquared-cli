@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 import { parseArgs, randomRequestId, requireArg } from './lib/shared/primitives.mjs'
-import { gatewayConnect, gatewayConnectJob, gatewayHealth, gatewayInboxIndex, gatewayOwnerNotification } from './lib/gateway/api.mjs'
+import { gatewayConnect, gatewayConnectJob, gatewayConversationShow, gatewayHealth, gatewayInboxIndex, gatewayOwnerNotification } from './lib/gateway/api.mjs'
 import { resolveGatewayBase, defaultGatewayStateFile, readGatewayState, currentRuntimeRevision } from './lib/gateway/state.mjs'
 import { getFriendDirectory } from './lib/transport/relay_http.mjs'
 import { generateRuntimeKeyBundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
@@ -24,7 +24,7 @@ import {
   resolveAgentSquaredDir,
   resolveUserPath
 } from './lib/shared/paths.mjs'
-import { buildSenderBaseReport, buildSenderFailureReport, buildSkillOutboundText, inferOwnerFacingLanguage, peerResponseText, renderOwnerFacingReport } from './lib/conversation/templates.mjs'
+import { buildSenderBaseReport, buildSenderFailureReport, buildSkillOutboundText, inferOwnerFacingLanguage, peerResponseText, renderConversationDetails, renderOwnerFacingReport } from './lib/conversation/templates.mjs'
 import { scrubOutboundText } from './lib/runtime/safety.mjs'
 import { buildStandardRuntimeOwnerLines, buildStandardRuntimeReport } from './lib/runtime/report.mjs'
 import { chooseInboundSkill, resolveMailboxKey } from './lib/routing/agent_router.mjs'
@@ -128,6 +128,17 @@ function toOwnerFacingLines(text = '') {
     .split('\n')
     .map((line) => line.trimEnd())
     .filter((line) => line.length > 0)
+}
+
+async function summarizeConversationWithRuntime(localRuntimeExecutor, context = {}, fallback = '') {
+  if (typeof localRuntimeExecutor?.summarizeConversation !== 'function') {
+    return clean(fallback)
+  }
+  try {
+    return clean(await localRuntimeExecutor.summarizeConversation(context)) || clean(fallback)
+  } catch {
+    return clean(fallback)
+  }
 }
 
 function buildOwnerReportDeliveredText(language = 'en') {
@@ -1837,6 +1848,35 @@ async function commandFriendMessage(args) {
   if (turnLog.length > 0) {
     summarizedOverall = excerpt(replyText || turnLog.at(-1)?.replyText || '', 240)
   }
+  const conversationTurnsForReport = turnLog.map((turn) => ({
+    turnIndex: turn.turnIndex,
+    outboundText: scrubOutboundText(turn.outboundText),
+    replyText: scrubOutboundText(turn.replyText),
+    localDecision: turn.localDecision,
+    localStopReason: turn.localStopReason,
+    remoteDecision: turn.remoteDecision,
+    remoteStopReason: turn.remoteStopReason
+  }))
+  if (!localRuntimeExecutor) {
+    try {
+      localRuntimeExecutor = await createCliLocalRuntimeExecutor({
+        agentId: context.agentId,
+        keyFile: context.keyFile,
+        args
+      })
+    } catch {
+      localRuntimeExecutor = null
+    }
+  }
+  summarizedOverall = await summarizeConversationWithRuntime(localRuntimeExecutor, {
+    localAgentId: context.agentId,
+    remoteAgentId: targetAgentId,
+    selectedSkill: skillHint,
+    direction: 'outbound',
+    conversationKey,
+    turns: conversationTurnsForReport,
+    language: ownerLanguage
+  }, summarizedOverall || 'This conversation completed.')
   const defaultTurnOutline = turnLog.map((turn) => {
     const outbound = excerpt(turn.outboundText, 120)
     const reply = excerpt(turn.replyText, 120)
@@ -1855,6 +1895,7 @@ async function commandFriendMessage(args) {
     localAgentId: context.agentId,
     targetAgentId,
     selectedSkill: skillHint,
+    receiverSkill: clean(result?.response?.metadata?.selectedSkill || skillHint),
     sentAt,
     originalText: text,
     sentText: scrubOutboundText(turnLog[0]?.outboundText || outboundText),
@@ -1865,16 +1906,16 @@ async function commandFriendMessage(args) {
     turnCount: turnLog.length || 1,
     stopReason: finalRemoteControl.stopReason || localStopReason,
     overallSummary: summarizedOverall,
-      turnOutline: summarizedDetailedConversation.length > 0
-        ? summarizedDetailedConversation.map((summary, index) => ({
-          turnIndex: index + 1,
-          summary: clean(summary).replace(/^Turn\s+\d+\s*:\s*/i, '')
-        }))
+    turnOutline: summarizedDetailedConversation.length > 0
+      ? summarizedDetailedConversation.map((summary, index) => ({
+        turnIndex: index + 1,
+        summary: clean(summary).replace(/^Turn\s+\d+\s*:\s*/i, '')
+      }))
       : defaultTurnOutline,
-    actionItems,
+    conversationTurns: conversationTurnsForReport,
     detailsHint: continuationError
-      ? `Detailed turn-by-turn exchange is available in the conversation output below. The local AI runtime then failed while preparing the next turn: ${continuationError}`
-      : 'Detailed turn-by-turn exchange is available in the conversation output below.',
+      ? `The local AI runtime then failed while preparing the next turn: ${continuationError}`
+      : '',
     language: ownerLanguage,
     timeZone: ownerTimeZone,
     localTime: true
@@ -1935,6 +1976,25 @@ async function commandInboxShow(args) {
   printJson(await gatewayInboxIndex(gatewayBase))
 }
 
+async function commandConversationShow(args) {
+  const conversationId = requireArg(args['conversation-id'] || args.id, '--conversation-id is required')
+  const gateway = await ensureGatewayForUse(args)
+  const conversation = await gatewayConversationShow(gateway.gatewayBase, conversationId)
+  const ownerLanguage = inferOwnerFacingLanguage(conversation?.summary, conversationId)
+  const ownerFacingText = renderConversationDetails(conversation?.finalEntry ?? conversation, {
+    language: ownerLanguage
+  })
+  printJson({
+    ok: true,
+    conversationId,
+    conversation,
+    ownerFacingMode: 'verbatim',
+    ownerFacingInstruction: 'Use ownerFacingText verbatim when the owner asks for this Conversation ID detail.',
+    ownerFacingText,
+    ownerFacingLines: toOwnerFacingLines(ownerFacingText)
+  })
+}
+
 async function commandLocalInspect() {
   const profiles = discoverLocalAgentProfiles()
   const reusableProfiles = profiles.filter((item) => item.agentId && item.keyFile)
@@ -1976,6 +2036,7 @@ function helpText() {
     '  a2-cli friend list --agent-id <id> --key-file <file>',
     '  a2-cli friend msg --target-agent <id> --text <text> --agent-id <id> --key-file <file> --skill-name <name> --skill-file /path/to/skill.md',
     '  a2-cli inbox show --agent-id <id> --key-file <file>',
+    '  a2-cli conversation show --conversation-id <id> --agent-id <id> --key-file <file>',
     '',
     'Host options (runtime-specific, optional):',
     '  --host-runtime <auto|openclaw|hermes>',
@@ -2022,6 +2083,10 @@ export async function runA2Cli(argv) {
   }
   if (group === 'inbox' && (action === 'show' || action === 'index')) {
     await commandInboxShow(args)
+    return
+  }
+  if ((group === 'conversation' || group === 'conversations') && (action === 'show' || action === 'detail' || action === 'details')) {
+    await commandConversationShow(args)
     return
   }
   if (group === 'local' && action === 'inspect') {

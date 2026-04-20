@@ -1,5 +1,5 @@
 import { withOpenClawGatewayClient } from './ws_client.mjs'
-import { buildReceiverBaseReport, inferOwnerFacingLanguage, parseAgentSquaredOutboundEnvelope } from '../../lib/conversation/templates.mjs'
+import { buildConversationSummaryPrompt, buildReceiverBaseReport, inferOwnerFacingLanguage, parseAgentSquaredOutboundEnvelope } from '../../lib/conversation/templates.mjs'
 import { normalizeConversationControl, resolveConversationMaxTurns, resolveInboundConversationIdentity } from '../../lib/conversation/policy.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import {
@@ -229,6 +229,55 @@ export function createOpenClawAdapter({
     })
   }
 
+  async function summarizeConversation(context = {}) {
+    return retryTransientOpenClawRuntime(async () => withGateway(async (client) => {
+      const sessionKey = stableId(
+        'agentsquared-summary',
+        localAgentId,
+        context.remoteAgentId,
+        context.conversationKey,
+        `${context.turns?.length ?? 0}`
+      )
+      const accepted = await requestOpenClaw(client, 'agent', {
+        agentId: agentName,
+        sessionKey,
+        message: buildConversationSummaryPrompt({
+          localAgentId,
+          remoteAgentId: context.remoteAgentId,
+          selectedSkill: context.selectedSkill,
+          direction: context.direction,
+          conversationKey: context.conversationKey,
+          turns: context.turns,
+          language: context.language
+        }),
+        extraSystemPrompt: [
+          OPENCLAW_AGENT_SQUARED_NO_TOOLS_PROMPT,
+          'Return only the concise owner-facing summary text.'
+        ].join('\n'),
+        idempotencyKey: stableId('agentsquared-summary-run', localAgentId, context.conversationKey, `${context.turns?.length ?? 0}`)
+      }, timeoutMs, 'conversation summary request', { openclawAgent: agentName, localAgentId })
+      const runId = readOpenClawRunId(accepted)
+      if (!runId) {
+        throw new Error('OpenClaw summary call did not return a runId.')
+      }
+      const waited = await requestOpenClaw(client, 'agent.wait', {
+        runId,
+        timeoutMs: Math.min(timeoutMs, 90000)
+      }, Math.min(timeoutMs, 90000) + 1000, 'conversation summary wait')
+      const history = await requestOpenClaw(client, 'chat.history', {
+        sessionKey,
+        limit: 6
+      }, timeoutMs, 'conversation summary history')
+      return scrubOutboundText(resolveFinalAssistantResultText({
+        waited,
+        history,
+        runId,
+        label: 'OpenClaw conversation summary',
+        sessionKey
+      }))
+    }), { stage: 'OpenClaw conversation summary', maxAttempts: 2 })
+  }
+
   async function resolveOwnerRoute(client) {
     return resolveOwnerRouteFromSessions(await listSessions(client), {
       agentName
@@ -296,6 +345,7 @@ export function createOpenClawAdapter({
             skillSummary: `I paused this exchange because the recent peer conversation window was exceeded. Current 10-minute turn count: ${budget.windowTurns}.`,
             conversationTurns: updatedConversation?.turns?.length || conversation.turnIndex,
             stopReason: 'system-error',
+            conversationTurnDetails: updatedConversation?.turns ?? [],
             detailsAvailableInInbox: true,
             remoteSentAt,
             language: ownerLanguage,
@@ -456,6 +506,7 @@ export function createOpenClawAdapter({
             skillSummary: clean(parsed.ownerSummary || parsed.ownerReport?.summary),
             conversationTurns: updatedConversation?.turns?.length || conversation.turnIndex,
             stopReason: safetyStopReason,
+            conversationTurnDetails: updatedConversation?.turns ?? [],
             detailsAvailableInInbox: true,
             remoteSentAt,
             language: ownerLanguage,
@@ -528,6 +579,15 @@ export function createOpenClawAdapter({
           conversation.turnIndex,
           maxTurnIndexFromOutline(turnOutline)
         ) || 1
+        const summarizedOwnerReport = await summarizeConversation({
+          localAgentId,
+          remoteAgentId,
+          selectedSkill: parsed.selectedSkill,
+          direction: 'inbound',
+          conversationKey,
+          turns: updatedConversation?.turns ?? [],
+          language: inferOwnerFacingLanguage(displayInboundText, safePeerReplyText, safeOwnerSummary)
+        }).catch(() => safeOwnerSummary)
         const ownerReport = buildReceiverBaseReport({
           localAgentId,
           remoteAgentId,
@@ -538,10 +598,11 @@ export function createOpenClawAdapter({
           inboundText: displayInboundText,
           peerReplyText: safePeerReplyText,
           repliedAt: new Date().toISOString(),
-          skillSummary: safeOwnerSummary,
+          skillSummary: summarizedOwnerReport || safeOwnerSummary,
           conversationTurns: effectiveConversationTurns,
           stopReason: conversation.stopReason,
           turnOutline,
+          conversationTurnDetails: updatedConversation?.turns ?? [],
           detailsAvailableInInbox: true,
           remoteSentAt,
           language: inferOwnerFacingLanguage(displayInboundText, safePeerReplyText, safeOwnerSummary),
@@ -658,6 +719,7 @@ export function createOpenClawAdapter({
     gatewayUrl: clean(gatewayUrl),
     preflight,
     executeInbound,
-    pushOwnerReport
+    pushOwnerReport,
+    summarizeConversation
   }
 }
