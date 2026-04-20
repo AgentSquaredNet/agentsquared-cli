@@ -192,7 +192,7 @@ function exportHermesSession(command = 'hermes', sessionId = '', {
   }
 }
 
-function listHermesSendMessageTargets(hermesHome = '') {
+function loadHermesChannelDirectory(hermesHome = '') {
   const pythonPath = hermesPythonPath(hermesHome)
   const projectRoot = hermesProjectRoot(hermesHome)
   const env = {
@@ -201,8 +201,8 @@ function listHermesSendMessageTargets(hermesHome = '') {
   }
   const script = [
     'import json',
-    'from tools.send_message_tool import send_message_tool',
-    'print(send_message_tool({"action": "list"}))'
+    'from gateway.channel_directory import load_directory',
+    'print(json.dumps(load_directory(), ensure_ascii=False))'
   ].join('\n')
   const result = spawnSync(pythonPath, ['-c', script], {
     cwd: projectRoot,
@@ -214,20 +214,24 @@ function listHermesSendMessageTargets(hermesHome = '') {
     return []
   }
   try {
-    const payload = JSON.parse(clean(result.stdout) || '{}')
-    const lines = `${payload?.targets ?? ''}`.split(/\r?\n/)
-    return lines.map((line) => {
-      const match = line.match(/^\s+([a-z0-9_]+:[^\s].*?)(?:\s+\([^)]+\))?\s*$/i)
-      if (!match) {
-        return null
-      }
-      const target = clean(match[1])
-      const platform = clean(target.split(':', 1)[0]).toLowerCase()
-      return platform && target ? { platform, target } : null
-    }).filter(Boolean)
+    return JSON.parse(clean(result.stdout) || '{}')
   } catch {
-    return []
+    return { updated_at: null, platforms: {} }
   }
+}
+
+function hermesChannelTargetName(platform = '', entry = {}) {
+  const name = clean(entry?.name || entry?.id)
+  if (!name) {
+    return ''
+  }
+  if (platform === 'discord' && clean(entry?.guild)) {
+    return `#${name}`
+  }
+  if (platform !== 'discord' && clean(entry?.type)) {
+    return `${name} (${clean(entry.type)})`
+  }
+  return name
 }
 
 function resolveHermesSendMessageTargetForSource(hermesHome = '', source = '') {
@@ -235,9 +239,13 @@ function resolveHermesSendMessageTargetForSource(hermesHome = '', source = '') {
   if (!normalizedSource) {
     return ''
   }
-  const targets = listHermesSendMessageTargets(hermesHome)
-  const exact = targets.find((entry) => entry.platform === normalizedSource && entry.target.startsWith(`${normalizedSource}:`))
-  return clean(exact?.target)
+  const directory = loadHermesChannelDirectory(hermesHome)
+  const entries = Array.isArray(directory?.platforms?.[normalizedSource])
+    ? directory.platforms[normalizedSource]
+    : []
+  const first = entries.find((entry) => clean(entry?.id || entry?.name))
+  const targetName = hermesChannelTargetName(normalizedSource, first)
+  return targetName ? `${normalizedSource}:${targetName}` : ''
 }
 
 export function resolveHermesOwnerTarget(hermesHome = '', {
@@ -253,7 +261,7 @@ export function resolveHermesOwnerTarget(hermesHome = '', {
         source: 'hermes-session-export',
         sessionId,
         sessionSource: source,
-        targetSource: exactTarget ? 'send-message-list' : 'platform-home'
+        targetSource: exactTarget ? 'channel-directory' : 'platform-home'
       }
     }
   }

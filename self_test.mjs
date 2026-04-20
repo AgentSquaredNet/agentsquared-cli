@@ -149,6 +149,18 @@ const store = createInboxStore({ inboxDir })
 const hermesHome = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-hermes-session-export-'))
 try {
   fs.writeFileSync(path.join(hermesHome, '.env'), 'FEISHU_HOME_CHANNEL=oc_should_not_win\nTELEGRAM_HOME_CHANNEL=-1001\n', 'utf8')
+  const hermesProjectRoot = path.join(hermesHome, 'hermes-agent')
+  const hermesGatewayDir = path.join(hermesProjectRoot, 'gateway')
+  fs.mkdirSync(hermesGatewayDir, { recursive: true })
+  fs.writeFileSync(path.join(hermesGatewayDir, '__init__.py'), '', 'utf8')
+  fs.writeFileSync(path.join(hermesGatewayDir, 'channel_directory.py'), [
+    'def load_directory():',
+    '    return {',
+    '        "platforms": {',
+    '            "telegram": [{"id": "-1001", "name": "Owner Chat", "type": "dm"}]',
+    '        }',
+    '    }'
+  ].join('\n'), 'utf8')
   const fakeHermes = path.join(hermesHome, 'fake-hermes')
   fs.writeFileSync(fakeHermes, [
     '#!/bin/sh',
@@ -166,8 +178,9 @@ try {
   ].join('\n'), 'utf8')
   fs.chmodSync(fakeHermes, 0o755)
   const route = resolveHermesOwnerTarget(hermesHome, { command: fakeHermes })
-  assert(route.target === 'telegram', 'Hermes owner target should come from sessions export source before Feishu fallback')
+  assert(route.target === 'telegram:Owner Chat (dm)', 'Hermes owner target should use structured channel directory fields before Feishu fallback')
   assert(route.source === 'hermes-session-export', 'Hermes owner target should record session export source')
+  assert(route.targetSource === 'channel-directory', 'Hermes owner target should record structured channel directory source')
 } finally {
   fs.rmSync(hermesHome, { recursive: true, force: true })
 }
