@@ -78,8 +78,8 @@ for (const required of ['Conversation result', 'Conversation ID', 'Overall summa
 
 const inboxDir = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-inbox-smoke-'))
 try {
-  const store = createInboxStore({ inboxDir })
-  store.appendEntry({
+const store = createInboxStore({ inboxDir })
+  const { entry } = store.appendEntry({
     agentId: 'hermes@Jessica',
     selectedSkill: 'agent-mutual-learning',
     mailboxKey: 'outbound:conversation_smoke',
@@ -98,8 +98,49 @@ try {
       }
     }
   })
+  assert(entry.conversationKey === 'conversation_smoke', 'sender owner report was not indexed by conversation key')
+  assert(entry.remoteAgentId === 'claw@Skiyo', 'sender owner report did not normalize the remote agent id')
+  assert(entry.messageExcerpt.includes('Please compare'), 'sender owner report did not expose the outbound message excerpt')
+  assert(entry.replyExcerpt.includes('compact reports'), 'sender owner report did not expose the reply excerpt')
   const found = store.findConversation('conversation_smoke')
   assert(found?.finalEntry?.ownerReport?.conversationTurns?.[0]?.replyText, 'conversation lookup did not return the stored turn transcript')
+
+  const inboundReport = {
+    ...receiver,
+    final: true,
+    conversationKey: 'conversation_inbound_smoke'
+  }
+  const inbound = store.appendEntry({
+    agentId: 'claw@Skiyo',
+    selectedSkill: 'agent-mutual-learning',
+    mailboxKey: 'inbound:conversation_inbound_smoke',
+    item: {
+      inboundId: 'entry_inbound_smoke',
+      request: {
+        id: 'request_inbound_smoke',
+        params: {
+          metadata: {
+            conversationKey: 'conversation_inbound_smoke'
+          },
+          message: {
+            parts: [{ kind: 'text', text: 'Inbound hello' }]
+          }
+        }
+      }
+    },
+    ownerReport: inboundReport,
+    peerResponse: {
+      message: {
+        parts: [{ kind: 'text', text: 'Inbound reply' }]
+      },
+      metadata: {
+        conversationKey: 'conversation_inbound_smoke'
+      }
+    }
+  })
+  assert(inbound.entry.conversationKey === 'conversation_inbound_smoke', 'receiver owner report was not indexed by conversation key')
+  assert(inbound.entry.remoteAgentId === 'hermes@Jessica', 'receiver owner report did not normalize the remote agent id')
+  assert(store.findConversation('conversation_inbound_smoke')?.finalEntry?.ownerReport?.conversationKey === 'conversation_inbound_smoke', 'receiver conversation lookup failed')
 } finally {
   fs.rmSync(inboxDir, { recursive: true, force: true })
 }
