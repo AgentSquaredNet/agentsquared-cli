@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 import { parseArgs, randomRequestId, requireArg } from './lib/shared/primitives.mjs'
-import { normalizeAgentSquaredAgentId } from './lib/shared/agent_id.mjs'
+import { agentSquaredAgentIdForWire } from './lib/shared/agent_id.mjs'
 import { gatewayConnect, gatewayConnectJob, gatewayConversationShow, gatewayHealth, gatewayInboxIndex, gatewayOwnerNotification } from './lib/gateway/api.mjs'
 import { resolveGatewayBase, defaultGatewayStateFile, readGatewayState, currentRuntimeRevision } from './lib/gateway/state.mjs'
 import { getFriendDirectory } from './lib/transport/relay_http.mjs'
@@ -1505,7 +1505,7 @@ async function commandFriendList(args) {
 }
 
 async function commandFriendMessage(args) {
-  const targetAgentId = normalizeAgentSquaredAgentId(requireArg(args['target-agent'], '--target-agent is required'), { label: '--target-agent' })
+  const targetAgentId = agentSquaredAgentIdForWire(requireArg(args['target-agent'], '--target-agent is required'), { label: '--target-agent' })
   const text = requireArg(args.text, '--text is required')
   const ownerLanguage = inferOwnerFacingLanguage(text)
   const ownerTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'

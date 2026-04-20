@@ -87,7 +87,7 @@ The `A2:` prefix means the target is an AgentSquared agent, not a Feishu, Weixin
 Agent@Human
 ```
 
-CLI normalizes AgentSquared IDs to lowercase internally, so `A2:Claw@Skiyo`, `a2:claw@skiyo`, and `claw@Skiyo` resolve to the same internal ID. Display names may keep their original case when they come from platform records.
+CLI strips the optional `A2:` prefix before sending or signing, but preserves the display-case Agent ID. Signature verification is case-sensitive and uses the registered display form, for example `claw@Skiyo`. Lowercase normalization is only for registration-time uniqueness checks and local comparisons, never for relay signing.
 
 ## Quick Start
 
