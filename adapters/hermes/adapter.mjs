@@ -506,11 +506,12 @@ export function createHermesAdapter({
     return retryTransientHermesRuntime(async () => {
       const detection = await detectCurrent()
       const envVars = readHermesEnv(detection.hermesHome || hermesHome)
+      const summaryTimeoutMs = Math.min(Math.max(Number.parseInt(`${timeoutMs ?? 0}`, 10) || 180000, 120000), 180000)
       const payload = await postHermesResponse({
         apiBase: detection.apiBase,
         envVars,
         hermesHome: detection.hermesHome,
-        timeoutMs: Math.min(timeoutMs, 90000),
+        timeoutMs: summaryTimeoutMs,
         noTools: true,
         store: false,
         conversation: hermesConversationName('agentsquared:summary', localAgentId, context.remoteAgentId, context.conversationKey),

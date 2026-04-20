@@ -231,6 +231,7 @@ export function createOpenClawAdapter({
 
   async function summarizeConversation(context = {}) {
     return retryTransientOpenClawRuntime(async () => withGateway(async (client) => {
+      const summaryTimeoutMs = Math.min(Math.max(Number.parseInt(`${timeoutMs ?? 0}`, 10) || 180000, 120000), 180000)
       const sessionKey = stableId(
         'agentsquared-summary',
         localAgentId,
@@ -262,8 +263,8 @@ export function createOpenClawAdapter({
       }
       const waited = await requestOpenClaw(client, 'agent.wait', {
         runId,
-        timeoutMs: Math.min(timeoutMs, 90000)
-      }, Math.min(timeoutMs, 90000) + 1000, 'conversation summary wait')
+        timeoutMs: summaryTimeoutMs
+      }, summaryTimeoutMs + 1000, 'conversation summary wait')
       const history = await requestOpenClaw(client, 'chat.history', {
         sessionKey,
         limit: 6
