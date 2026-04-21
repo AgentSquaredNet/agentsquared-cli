@@ -1,5 +1,5 @@
 import { withOpenClawGatewayClient } from './ws_client.mjs'
-import { buildConversationSummaryPrompt, parseAgentSquaredOutboundEnvelope } from '../../lib/conversation/templates.mjs'
+import { buildConversationSummaryPrompt, normalizeConversationSummary, parseAgentSquaredOutboundEnvelope } from '../../lib/conversation/templates.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import { createInboundAdapterPipeline } from '../../lib/runtime/adapter_pipeline.mjs'
 import {
@@ -265,13 +265,13 @@ export function createOpenClawAdapter({
         sessionKey,
         limit: 6
       }, timeoutMs, 'conversation summary history')
-      return scrubOutboundText(resolveFinalAssistantResultText({
+      return normalizeConversationSummary(scrubOutboundText(resolveFinalAssistantResultText({
         waited,
         history,
         runId,
         label: 'OpenClaw conversation summary',
         sessionKey
-      }))
+      })))
     }), { stage: 'OpenClaw conversation summary', maxAttempts: 2 })
   }
 

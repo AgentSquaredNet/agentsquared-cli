@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 
-import { buildConversationSummaryPrompt } from '../../lib/conversation/templates.mjs'
+import { buildConversationSummaryPrompt, normalizeConversationSummary } from '../../lib/conversation/templates.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import { createInboundAdapterPipeline } from '../../lib/runtime/adapter_pipeline.mjs'
 import { checkHermesApiServerHealth, extractHermesResponseText, postHermesResponse } from './api_client.mjs'
@@ -525,7 +525,7 @@ export function createHermesAdapter({
           language: context.language
         })
       })
-      return scrubOutboundText(extractHermesResponseText(payload))
+      return normalizeConversationSummary(scrubOutboundText(extractHermesResponseText(payload)))
     }, { stage: 'Hermes conversation summary', maxAttempts: 2 })
   }
 

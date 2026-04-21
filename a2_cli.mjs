@@ -26,7 +26,7 @@ import {
   resolveAgentSquaredDir,
   resolveUserPath
 } from './lib/shared/paths.mjs'
-import { buildSenderBaseReport, buildSenderFailureReport, buildSkillOutboundText, inferOwnerFacingLanguage, peerResponseText, renderConversationDetails, renderOwnerFacingReport } from './lib/conversation/templates.mjs'
+import { buildSenderBaseReport, buildSenderFailureReport, buildSkillOutboundText, inferOwnerFacingLanguage, normalizeConversationSummary, peerResponseText, renderConversationDetails, renderOwnerFacingReport } from './lib/conversation/templates.mjs'
 import { scrubOutboundText } from './lib/runtime/safety.mjs'
 import { buildStandardRuntimeOwnerLines, buildStandardRuntimeReport } from './lib/runtime/report.mjs'
 import { chooseInboundSkill, resolveMailboxKey } from './lib/routing/agent_router.mjs'
@@ -134,12 +134,12 @@ function toOwnerFacingLines(text = '') {
 
 async function summarizeConversationWithRuntime(localRuntimeExecutor, context = {}, fallback = '') {
   if (typeof localRuntimeExecutor?.summarizeConversation !== 'function') {
-    return clean(fallback)
+    return normalizeConversationSummary(fallback)
   }
   try {
-    return clean(await localRuntimeExecutor.summarizeConversation(context)) || clean(fallback)
+    return normalizeConversationSummary(await localRuntimeExecutor.summarizeConversation(context), { fallback })
   } catch {
-    return clean(fallback)
+    return normalizeConversationSummary(fallback)
   }
 }
 
