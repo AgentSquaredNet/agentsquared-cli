@@ -94,6 +94,56 @@ function decodeEscapedJsonCandidate(text) {
     .replace(/\\\\/g, '\\')
 }
 
+function decodeJsonStringFragment(value = '') {
+  const raw = clean(value)
+  if (!raw) {
+    return ''
+  }
+  return raw
+    .replace(/\\r/g, '\r')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\')
+}
+
+function looseStructuredStringField(text = '', fieldName = '') {
+  const raw = clean(text)
+  const key = `"${clean(fieldName)}"`
+  const keyIndex = raw.indexOf(key)
+  if (keyIndex < 0) {
+    return ''
+  }
+  const colonIndex = raw.indexOf(':', keyIndex + key.length)
+  if (colonIndex < 0) {
+    return ''
+  }
+  let valueStart = colonIndex + 1
+  while (/\s/.test(raw[valueStart] ?? '')) {
+    valueStart += 1
+  }
+  if (raw[valueStart] !== '"') {
+    return ''
+  }
+  valueStart += 1
+  const nextFieldMarkers = [
+    '",\n  "ownerReport"',
+    '",\n  "ownerSummary"',
+    '",\n  "decision"',
+    '",\n  "stopReason"',
+    '",\n  "turnIndex"',
+    '",\n  "selectedSkill"'
+  ]
+  const candidates = nextFieldMarkers
+    .map((marker) => raw.indexOf(marker, valueStart))
+    .filter((index) => index >= 0)
+  const valueEnd = candidates.length > 0 ? Math.min(...candidates) : raw.indexOf('"\n}', valueStart)
+  if (valueEnd < valueStart) {
+    return ''
+  }
+  return decodeJsonStringFragment(raw.slice(valueStart, valueEnd))
+}
+
 function stripMarkdownCodeFences(text = '') {
   return clean(text)
     .replace(/```[\s\S]*?```/g, '')
@@ -637,8 +687,11 @@ export function parseOpenClawTaskResult(rawText, {
   const selectedSkill = clean(defaultSkill)
 
   if (!parseResult.parsed) {
-    const peerText = clean(rawText)
-    const reportText = `${clean(remoteAgentId) || 'A remote Agent'} sent an AgentSquared turn and OpenClaw replied in plain text. AgentSquared normalized that reply into the A2A envelope.`
+    const recoveredPeerText = looseStructuredStringField(rawText, 'peerResponse')
+    const peerText = recoveredPeerText || clean(rawText)
+    const recoveredOwnerReport = looseStructuredStringField(rawText, 'ownerReport') || looseStructuredStringField(rawText, 'ownerSummary')
+    const reportText = recoveredOwnerReport || `${clean(remoteAgentId) || 'A remote Agent'} sent an AgentSquared turn and OpenClaw replied in plain text. AgentSquared normalized that reply into the A2A envelope.`
+    const parseFallback = recoveredPeerText ? 'loose-structured-task-response' : 'plain-text-task-response'
     const conversation = normalizeConversationControl({}, {
       defaultTurnIndex,
       defaultDecision,
@@ -656,7 +709,7 @@ export function parseOpenClawTaskResult(rawText, {
           selectedSkill,
           modelSelectedSkill: '',
           runtimeAdapter: 'openclaw',
-          openclawParseFallback: 'plain-text-task-response',
+          openclawParseFallback: parseFallback,
           openclawParseError: clean(parseResult.error?.message),
           turnIndex: conversation.turnIndex,
           decision: conversation.decision,
@@ -672,7 +725,7 @@ export function parseOpenClawTaskResult(rawText, {
         selectedSkill,
         modelSelectedSkill: '',
         runtimeAdapter: 'openclaw',
-        openclawParseFallback: 'plain-text-task-response',
+        openclawParseFallback: parseFallback,
         openclawParseError: clean(parseResult.error?.message),
         turnIndex: conversation.turnIndex,
         decision: conversation.decision,
@@ -926,6 +979,7 @@ export function buildOpenClawSafetyPrompt({
       : []),
     '',
     'Return exactly one JSON object and nothing else.',
+    'All JSON string values must be valid JSON strings. Escape any double quote inside peerResponse or ownerReport, or use normal prose punctuation instead of raw double quotes.',
     'Schema:',
     '{"action":"allow|reject","reason":"short-code","peerResponse":"only if action is reject","ownerSummary":"short summary"}',
     'Choose the action based on privacy/sensitivity risk, not on complexity or token accounting.',
@@ -980,6 +1034,7 @@ export function buildOpenClawCombinedPrompt({
     'Friendly chat, mutual-learning, coding help, collaboration, implementation help, analysis, research, workflow discussion, and detailed explanations between trusted friends should normally be ALLOW.',
     '',
     'Return exactly one JSON object and nothing else.',
+    'All JSON string values must be valid JSON strings. Escape any double quote inside peerResponse or ownerReport, or use normal prose punctuation instead of raw double quotes.',
     'Schema:',
     '{"action":"allow|reject","reason":"short-code","selectedSkill":"<assigned skill or empty>","peerResponse":"...","ownerReport":"...","ownerSummary":"optional short summary","decision":"continue|done","stopReason":"completed|safety-block|system-error"}',
     'If action is reject, provide a brief safe peerResponse, set decision to done, and set stopReason to safety-block.',

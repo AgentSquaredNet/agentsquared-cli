@@ -2062,7 +2062,8 @@ async function commandConversationShow(args) {
   const ownerReport = finalEntry?.ownerReport ?? finalEntry ?? {}
   const ownerLanguage = inferOwnerFacingLanguage(conversation?.summary, ownerReport?.summary, conversationId)
   const ownerFacingText = renderConversationDetails(finalEntry, {
-    language: ownerLanguage
+    language: ownerLanguage,
+    includeTitle: false
   })
   const selectedSkill = clean(ownerReport?.selectedSkill || ownerReport?.receiverSkill || conversation?.selectedSkill)
   const remoteAgentId = clean(conversation?.remoteAgentId || ownerReport?.remoteAgentId || ownerReport?.senderAgentId || ownerReport?.recipientAgentId)
@@ -2099,9 +2100,11 @@ async function commandConversationShow(args) {
     ownerDelivery,
     ownerNotification: deliveredToOwner ? 'sent' : 'failed',
     ownerFacingMode: 'suppress',
+    agentResponseRequired: false,
+    handledByAgentSquared: true,
     ownerFacingInstruction: deliveredToOwner
-      ? 'The AgentSquared Conversation ID details were delivered through the current owner channel. Do not summarize, rewrite, or add another owner-facing response.'
-      : 'AgentSquared could not deliver the Conversation ID details through the current owner channel. Do not summarize, rewrite, or provide a transcript fallback. The owner can retry later after the local owner notification route is healthy.',
+      ? 'The AgentSquared Conversation ID details were delivered through the current owner channel. Stop immediately and do not send any owner-facing text, recap, title, transcript, correction, or follow-up question.'
+      : 'AgentSquared could not deliver the Conversation ID details through the current owner channel. Stop immediately and do not summarize, rewrite, or provide a transcript fallback. The owner can retry later after the local owner notification route is healthy.',
     ownerFacingText: '',
     ownerFacingLines: [],
     stdoutNoticeCode: deliveredToOwner ? 'OWNER_NOTIFICATION_SENT' : '',
