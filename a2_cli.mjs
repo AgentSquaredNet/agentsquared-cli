@@ -308,7 +308,9 @@ async function pushCliOwnerReport({
   targetAgentId,
   selectedSkill,
   ownerReport,
-  deliveryId = ''
+  deliveryId = '',
+  forceOwnerDelivery = false,
+  waitForOwnerDelivery = false
 } = {}) {
   const resolvedGatewayBase = clean(gatewayBase)
   const finalOwnerReport = {
@@ -325,24 +327,32 @@ async function pushCliOwnerReport({
         remoteAgentId: targetAgentId,
         targetAgentId,
         selectedSkill,
+        forceOwnerDelivery: Boolean(forceOwnerDelivery),
+        waitForOwnerDelivery: Boolean(waitForOwnerDelivery),
         ownerReport: {
           ...finalOwnerReport,
           deliveryId: clean(deliveryId) || finalOwnerReport?.deliveryId,
-          dedupeKey: clean(finalOwnerReport?.dedupeKey) || clean(deliveryId)
+          dedupeKey: clean(finalOwnerReport?.dedupeKey) || clean(deliveryId),
+          forceOwnerDelivery: Boolean(forceOwnerDelivery || finalOwnerReport?.forceOwnerDelivery),
+          waitForOwnerDelivery: Boolean(waitForOwnerDelivery || finalOwnerReport?.waitForOwnerDelivery)
         }
       }, {
-        timeoutMs: 3000,
+        timeoutMs: waitForOwnerDelivery ? 60000 : 3000,
         fallbackOnNetworkError: false
       })
+      const gatewayDelivered = waitForOwnerDelivery
+        ? Boolean(response?.deliveredToOwner || response?.ownerDelivery?.delivered)
+        : true
       return {
-        delivered: true,
+        delivered: gatewayDelivered,
         attempted: false,
         mode: 'agentsquared-gateway',
-        status: 'sent',
-        reason: 'owner-notification-accepted-by-local-gateway',
+        status: response?.status || (gatewayDelivered ? 'sent' : 'failed'),
+        reason: gatewayDelivered ? 'owner-notification-delivered' : clean(response?.ownerDelivery?.reason) || 'owner-notification-not-delivered',
         entryId: response?.entryId ?? '',
         totalCount: response?.totalCount ?? 0,
-        ownerNotification: response?.ownerNotification ?? 'sent'
+        ownerNotification: response?.ownerNotification ?? (gatewayDelivered ? 'sent' : 'failed'),
+        ownerDelivery: response?.ownerDelivery ?? null
       }
     } catch (error) {
       return {
@@ -2028,19 +2038,59 @@ async function commandConversationShow(args) {
   const conversationId = requireArg(args['conversation-id'] || args.id, '--conversation-id is required')
   const gateway = await ensureGatewayForUse(args)
   const conversation = await gatewayConversationShow(gateway.gatewayBase, conversationId)
-  const ownerLanguage = inferOwnerFacingLanguage(conversation?.summary, conversationId)
-  const ownerFacingText = renderConversationDetails(conversation?.finalEntry ?? conversation, {
+  const finalEntry = conversation?.finalEntry ?? conversation
+  const ownerReport = finalEntry?.ownerReport ?? finalEntry ?? {}
+  const ownerLanguage = inferOwnerFacingLanguage(conversation?.summary, ownerReport?.summary, conversationId)
+  const ownerFacingText = renderConversationDetails(finalEntry, {
     language: ownerLanguage
   })
-  printJson({
-    ok: true,
+  const selectedSkill = clean(ownerReport?.selectedSkill || ownerReport?.receiverSkill || conversation?.selectedSkill)
+  const remoteAgentId = clean(conversation?.remoteAgentId || ownerReport?.remoteAgentId || ownerReport?.senderAgentId || ownerReport?.recipientAgentId)
+  const shouldNotifyOwner = !isTrueFlag(args['no-notify'])
+  const includeConversationJson = isTrueFlag(args['include-conversation-json']) || isTrueFlag(args.raw) || isTrueFlag(args.debug)
+  const ownerDelivery = shouldNotifyOwner
+    ? await pushCliOwnerReport({
+        agentId: args['agent-id'],
+        keyFile: args['key-file'],
+        args,
+        gatewayBase: gateway.gatewayBase,
+        targetAgentId: remoteAgentId,
+        selectedSkill,
+        ownerReport: {
+          ...ownerReport,
+          title: `**🅰️✌️ AgentSquared conversation details**`,
+          summary: clean(ownerReport?.summary || conversation?.summary || `Conversation details for ${conversationId}`),
+          message: ownerFacingText,
+          conversationKey: conversationId,
+          deliveryKind: 'conversation-details',
+          forceOwnerDelivery: true,
+          waitForOwnerDelivery: true,
+          dedupeKey: stableDedupeKey(['conversation-show', args['agent-id'], conversationId, Date.now()])
+        },
+        deliveryId: `conversation-show-${conversationId}-${Date.now()}`,
+        forceOwnerDelivery: true,
+        waitForOwnerDelivery: true
+      })
+    : { delivered: false, attempted: false, mode: 'disabled', reason: 'no-notify' }
+  const deliveredToOwner = Boolean(ownerDelivery.delivered)
+  const payload = {
+    ok: deliveredToOwner,
     conversationId,
-    conversation,
-    ownerFacingMode: 'verbatim',
-    ownerFacingInstruction: 'Use ownerFacingText verbatim when the owner asks for this Conversation ID detail.',
-    ownerFacingText,
-    ownerFacingLines: toOwnerFacingLines(ownerFacingText)
-  })
+    ownerDelivery,
+    ownerNotification: deliveredToOwner ? 'sent' : 'failed',
+    ownerFacingMode: 'suppress',
+    ownerFacingInstruction: deliveredToOwner
+      ? 'The AgentSquared Conversation ID details were delivered through the current owner channel. Do not summarize, rewrite, or add another owner-facing response.'
+      : 'AgentSquared could not deliver the Conversation ID details through the current owner channel. Do not summarize, rewrite, or provide a transcript fallback. The owner can retry later after the local owner notification route is healthy.',
+    ownerFacingText: '',
+    ownerFacingLines: [],
+    stdoutNoticeCode: deliveredToOwner ? 'OWNER_NOTIFICATION_SENT' : '',
+    stdoutLines: []
+  }
+  if (includeConversationJson) {
+    payload.conversation = conversation
+  }
+  printJson(payload)
 }
 
 async function commandLocalInspect() {
@@ -2084,13 +2134,14 @@ function helpText() {
     '  a2-cli friend list --agent-id <id> --key-file <file>',
     '  a2-cli friend msg --target-agent <A2:agent@human> --text <text> --agent-id <id> --key-file <file> --skill-name <name> --skill-file /path/to/skill.md',
     '  a2-cli inbox show --agent-id <id> --key-file <file>',
-    '  a2-cli conversation show --conversation-id <id> --agent-id <id> --key-file <file>',
+    '  a2-cli conversation show --conversation-id <id> --agent-id <id> --key-file <file> [--no-notify true]',
     '',
     'Host options (runtime-specific, optional):',
     '  --host-runtime <auto|openclaw|hermes>',
     '  OpenClaw: --openclaw-agent --openclaw-command --openclaw-cwd --openclaw-gateway-url --openclaw-gateway-token --openclaw-gateway-password',
     '  Hermes: --hermes-command --hermes-home --hermes-profile --hermes-api-base',
-    '  Friend messaging: --friend-msg-wait-ms <ms> (default: 50000 for one-turn workflows; multi-turn workflows are normally handed to the local gateway job runner; use --friend-msg-sync true only for debugging foreground execution)'
+    '  Friend messaging: --friend-msg-wait-ms <ms> (default: 50000 for one-turn workflows; multi-turn workflows are normally handed to the local gateway job runner; use --friend-msg-sync true only for debugging foreground execution)',
+    '  Conversation show: delivers the transcript through the current owner channel by default; --no-notify true is diagnostic-only and does not return a transcript fallback.'
   ].join('\n')
 }
 
