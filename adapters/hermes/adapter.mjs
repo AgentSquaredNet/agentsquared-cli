@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process'
 
-import { buildConversationSummaryPrompt, buildReceiverBaseReport, inferOwnerFacingLanguage } from '../../lib/conversation/templates.mjs'
-import { normalizeConversationControl, resolveConversationMaxTurns, resolveInboundConversationIdentity } from '../../lib/conversation/policy.mjs'
+import { buildConversationSummaryPrompt } from '../../lib/conversation/templates.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
+import { createInboundAdapterPipeline } from '../../lib/runtime/adapter_pipeline.mjs'
 import { checkHermesApiServerHealth, extractHermesResponseText, postHermesResponse } from './api_client.mjs'
 import { buildHermesProcessEnv } from './common.mjs'
 import { hermesProjectRoot, hermesPythonPath } from './common.mjs'
@@ -21,10 +21,6 @@ import {
   parseHermesTaskResult
 } from './helpers.mjs'
 import {
-  excerpt,
-  localOwnerTimeZone,
-  buildReceiverTurnOutline,
-  maxTurnIndexFromOutline,
   createPeerBudget
 } from '../../lib/runtime/adapters.mjs'
 
@@ -533,121 +529,38 @@ export function createHermesAdapter({
     }, { stage: 'Hermes conversation summary', maxAttempts: 2 })
   }
 
-  async function executeInbound({
-    item,
-    selectedSkill,
-    mailboxKey
-  }) {
-    const remoteAgentId = clean(item?.remoteAgentId)
-    const incomingSkillHint = clean(item?.suggestedSkill || item?.request?.params?.metadata?.skillHint)
-    const receivedAt = new Date().toISOString()
-    const inboundText = clean(item?.request?.params?.message?.parts?.[0]?.text || item?.request?.params?.message?.text || '')
-    const inboundMetadata = item?.request?.params?.metadata ?? {}
-    const inboundConversation = normalizeConversationControl(inboundMetadata, {
-      defaultTurnIndex: 1,
-      defaultDecision: 'done',
-      defaultStopReason: ''
-    })
-    const displayInboundText = inboundConversation.turnIndex > 1
-      ? inboundText
-      : (clean(inboundMetadata.originalOwnerText) || inboundText)
-    const ownerLanguage = inferOwnerFacingLanguage(displayInboundText, inboundText)
-    const ownerTimeZone = localOwnerTimeZone()
-    const conversationIdentity = resolveInboundConversationIdentity(item)
-    const conversationKey = clean(conversationIdentity.conversationKey)
-    return retryTransientHermesRuntime(async () => {
+  const { executeInbound } = createInboundAdapterPipeline({
+    localAgentId,
+    runtimeAdapter: 'hermes',
+    conversationStore,
+    consumePeerBudget,
+    summarizeConversation,
+    executeWithRuntime: (pipelineBody) => retryTransientHermesRuntime(async () => {
       const detection = await detectCurrent()
       const envVars = detection.envVars || ensureHermesApiServerEnv(detection.hermesHome).envVars
-      const budget = consumePeerBudget({ remoteAgentId })
-
-      if (budget.overBudget) {
-        const peerReplyText = 'I am pausing this AgentSquared request because this peer has reached the recent conversation window limit. My owner can decide whether to continue later.'
-        const conversation = normalizeConversationControl(item?.request?.params?.metadata ?? {}, {
-          defaultTurnIndex: 1,
-          defaultDecision: 'done',
-          defaultStopReason: 'system-error'
-        })
-        const updatedConversation = conversationStore?.appendTurn?.({
-          conversationKey,
-          peerSessionId: item?.peerSessionId || '',
-          requestId: clean(item?.request?.id),
-          remoteAgentId,
-          selectedSkill,
-          turnIndex: conversation.turnIndex,
-          inboundText: displayInboundText,
-          replyText: peerReplyText,
-          decision: 'done',
-          stopReason: 'system-error',
-          final: true,
-          ownerSummary: `I paused this exchange because the recent peer conversation window was exceeded. Current 10-minute turn count: ${budget.windowTurns}.`
-        }) ?? null
-        const ownerReport = buildReceiverBaseReport({
-          localAgentId,
-          remoteAgentId,
-          incomingSkillHint,
-          selectedSkill,
-          receivedAt,
-          inboundText: displayInboundText,
-          peerReplyText,
-          repliedAt: new Date().toISOString(),
-          skillSummary: `I paused this exchange because the recent peer conversation window was exceeded. Current 10-minute turn count: ${budget.windowTurns}.`,
-          conversationTurns: updatedConversation?.turns?.length || conversation.turnIndex,
-          stopReason: 'system-error',
-          conversationTurnDetails: updatedConversation?.turns ?? [],
-          detailsAvailableInInbox: true,
-          remoteSentAt: clean(inboundMetadata.sentAt),
-          language: ownerLanguage,
-          timeZone: ownerTimeZone,
-          localTime: true
-        })
-        return {
-          selectedSkill,
-          peerResponse: {
-            message: {
-              kind: 'message',
-              role: 'agent',
-              parts: [{ kind: 'text', text: peerReplyText }]
-            },
-            metadata: {
-              selectedSkill,
-              runtimeAdapter: 'hermes',
-              conversationKey,
-              turnIndex: conversation.turnIndex,
-              decision: 'done',
-              stopReason: 'system-error',
-              final: true,
-              finalize: true
-            }
-          },
-          ownerReport: {
-            ...ownerReport,
-            runtimeAdapter: 'hermes',
-            conversationKey,
-            turnIndex: conversation.turnIndex,
-            decision: 'done',
-            stopReason: 'system-error',
-            final: true,
-            finalize: true
-          }
-        }
-      }
-
-      const conversationControl = normalizeConversationControl(item?.request?.params?.metadata ?? {}, {
-        defaultTurnIndex: 1,
-        defaultDecision: 'done',
-        defaultStopReason: ''
-      })
-      if (conversationControl.turnIndex === 1) {
-        conversationStore?.endConversation?.(conversationKey)
-      }
-      const liveConversation = conversationStore?.ensureConversation?.({
-        conversationKey,
-        peerSessionId: item?.peerSessionId || '',
-        remoteAgentId,
-        selectedSkill
-      }) ?? null
-      const conversationTranscript = conversationStore?.transcript?.(liveConversation?.conversationKey || conversationKey) ?? ''
-      const metadata = item?.request?.params?.metadata ?? {}
+      return pipelineBody({ detection, envVars })
+    }, { stage: 'Hermes inbound execution' }),
+    displayInboundText: ({ inboundText, inboundMetadata, inboundConversation }) => (
+      inboundConversation.turnIndex > 1
+        ? inboundText
+        : (clean(inboundMetadata.originalOwnerText) || inboundText)
+    ),
+    remoteSentAt: ({ inboundMetadata }) => clean(inboundMetadata.sentAt),
+    runCombined: async ({
+      runtimeContext,
+      item,
+      selectedSkill,
+      remoteAgentId,
+      conversationKey,
+      conversationControl,
+      conversationTranscript,
+      metadata,
+      defaultDecision,
+      defaultStopReason,
+      inboundId
+    }) => {
+      const { detection, envVars } = runtimeContext
+      const hermesConversation = hermesConversationName('agentsquared:work', localAgentId, remoteAgentId, conversationKey, `${conversationControl.turnIndex}`)
       const taskPayload = await postHermesResponse({
         apiBase: detection.apiBase,
         envVars,
@@ -655,7 +568,7 @@ export function createHermesAdapter({
         timeoutMs,
         instructions: HERMES_STRUCTURED_NO_TOOLS_INSTRUCTIONS,
         noTools: true,
-        conversation: hermesConversationName('agentsquared:work', localAgentId, remoteAgentId, conversationKey, `${conversationControl.turnIndex}`),
+        conversation: hermesConversation,
         input: buildHermesCombinedPrompt({
           localAgentId,
           remoteAgentId,
@@ -668,193 +581,20 @@ export function createHermesAdapter({
       const parsed = parseHermesCombinedResult(taskPayload, {
         defaultSkill: selectedSkill,
         remoteAgentId,
-        inboundId: clean(item?.inboundId),
+        inboundId,
         defaultTurnIndex: conversationControl.turnIndex,
-        defaultDecision: conversationControl.final ? 'done' : (conversationControl.turnIndex < resolveConversationMaxTurns({
-          conversationPolicy: metadata?.conversationPolicy ?? null,
-          sharedSkill: metadata?.sharedSkill ?? null,
-          fallback: 1
-        }) ? 'continue' : 'done'),
-        defaultStopReason: conversationControl.final ? 'completed' : ''
+        defaultDecision,
+        defaultStopReason
       })
-      if (parsed.action !== 'allow') {
-        const safetyStopReason = 'safety-block'
-        const peerReplyText = scrubOutboundText(clean(parsed.peerResponse?.message?.parts?.[0]?.text || parsed.peerResponse?.message?.text))
-        const conversation = normalizeConversationControl(parsed?.peerResponse?.metadata ?? {}, {
-          defaultTurnIndex: conversationControl.turnIndex,
-          defaultDecision: 'done',
-          defaultStopReason: safetyStopReason
-        })
-        const updatedConversation = conversationStore?.appendTurn?.({
-          conversationKey,
-          peerSessionId: item?.peerSessionId || '',
-          requestId: clean(item?.request?.id),
-          remoteAgentId,
-          selectedSkill,
-          turnIndex: conversation.turnIndex,
-          inboundText: displayInboundText,
-          replyText: peerReplyText,
-          decision: conversation.decision,
-          stopReason: safetyStopReason,
-          final: true,
-          ownerSummary: clean(parsed.ownerSummary || parsed.ownerReport?.summary)
-        }) ?? null
-        const ownerReport = buildReceiverBaseReport({
-          localAgentId,
-          remoteAgentId,
-          incomingSkillHint,
-          selectedSkill,
-          receivedAt,
-          inboundText: displayInboundText,
-          peerReplyText,
-          repliedAt: new Date().toISOString(),
-          skillSummary: clean(parsed.ownerSummary || parsed.ownerReport?.summary),
-          conversationTurns: updatedConversation?.turns?.length || conversation.turnIndex,
-          stopReason: safetyStopReason,
-          conversationTurnDetails: updatedConversation?.turns ?? [],
-          detailsAvailableInInbox: true,
-          remoteSentAt: clean(inboundMetadata.sentAt),
-          language: ownerLanguage,
-          timeZone: ownerTimeZone,
-          localTime: true
-        })
-        return {
-          selectedSkill,
-          peerResponse: {
-            ...parsed.peerResponse,
-            message: {
-              kind: parsed.peerResponse?.message?.kind ?? 'message',
-              role: parsed.peerResponse?.message?.role ?? 'agent',
-              parts: [{ kind: 'text', text: peerReplyText }]
-            },
-            metadata: {
-              ...(parsed.peerResponse?.metadata ?? {}),
-              selectedSkill,
-              runtimeAdapter: 'hermes',
-              conversationKey,
-              safetyDecision: parsed.action,
-              safetyReason: clean(parsed.reason),
-              turnIndex: conversation.turnIndex,
-              decision: conversation.decision,
-              stopReason: safetyStopReason,
-              final: true,
-              finalize: true
-            }
-          },
-          ownerReport: {
-            ...ownerReport,
-            runtimeAdapter: 'hermes',
-            conversationKey,
-            safetyDecision: parsed.action,
-            safetyReason: clean(parsed.reason),
-            turnIndex: conversation.turnIndex,
-            decision: conversation.decision,
-            stopReason: safetyStopReason,
-            final: true,
-            finalize: true
-          }
-        }
-      }
-
-      const conversation = normalizeConversationControl(parsed?.peerResponse?.metadata ?? item?.request?.params?.metadata ?? {}, {
-        defaultTurnIndex: 1,
-        defaultDecision: 'done',
-        defaultStopReason: ''
-      })
-      const safePeerReplyText = scrubOutboundText(clean(parsed.peerResponse?.message?.parts?.[0]?.text))
-      const safeOwnerSummary = scrubOutboundText(clean(parsed.ownerSummary || parsed.ownerReport?.summary))
-      const updatedConversation = conversationStore?.appendTurn?.({
-        conversationKey,
-        peerSessionId: item?.peerSessionId || '',
-        requestId: clean(item?.request?.id),
-        remoteAgentId,
-        selectedSkill: parsed.selectedSkill,
-        turnIndex: conversation.turnIndex,
-        inboundText: displayInboundText,
-        replyText: safePeerReplyText,
-        decision: conversation.decision,
-        stopReason: conversation.stopReason,
-        final: conversation.final,
-        ownerSummary: safeOwnerSummary
-      }) ?? null
-      const turnOutline = buildReceiverTurnOutline(updatedConversation?.turns ?? [], conversation.turnIndex)
-      const effectiveConversationTurns = Math.max(
-        updatedConversation?.turns?.length || 0,
-        conversation.turnIndex,
-        maxTurnIndexFromOutline(turnOutline)
-      ) || 1
-      const summarizedOwnerReport = await summarizeConversation({
-        localAgentId,
-        remoteAgentId,
-        selectedSkill: parsed.selectedSkill,
-        direction: 'inbound',
-        conversationKey,
-        turns: updatedConversation?.turns ?? [],
-        language: inferOwnerFacingLanguage(displayInboundText, safePeerReplyText, safeOwnerSummary)
-      }).catch(() => safeOwnerSummary)
-      const ownerReport = buildReceiverBaseReport({
-        localAgentId,
-        remoteAgentId,
-        incomingSkillHint,
-        selectedSkill: parsed.selectedSkill,
-        conversationKey,
-        receivedAt,
-        inboundText: displayInboundText,
-        peerReplyText: safePeerReplyText,
-        repliedAt: new Date().toISOString(),
-        skillSummary: summarizedOwnerReport || safeOwnerSummary,
-        conversationTurns: effectiveConversationTurns,
-        stopReason: conversation.stopReason,
-        turnOutline,
-        conversationTurnDetails: updatedConversation?.turns ?? [],
-        detailsAvailableInInbox: true,
-        remoteSentAt: clean(inboundMetadata.sentAt),
-        language: inferOwnerFacingLanguage(displayInboundText, safePeerReplyText, safeOwnerSummary),
-        timeZone: ownerTimeZone,
-        localTime: true
-      })
-      if (conversation.final) {
-        conversationStore?.closeConversation?.(updatedConversation?.conversationKey || liveConversation?.conversationKey || conversationKey, safeOwnerSummary)
-      }
       return {
-        ...parsed,
-        peerResponse: {
-          ...parsed.peerResponse,
-          message: {
-            kind: parsed.peerResponse?.message?.kind ?? 'message',
-            role: parsed.peerResponse?.message?.role ?? 'agent',
-            parts: [{ kind: 'text', text: safePeerReplyText }]
-          },
-          metadata: {
-            ...(parsed.peerResponse?.metadata ?? {}),
-            incomingSkillHint,
-            conversationKey,
-            hermesConversation: hermesConversationName('agentsquared:work', localAgentId, remoteAgentId, conversationKey, `${conversationControl.turnIndex}`),
-            hermesApiBase: detection.apiBase,
-            turnIndex: conversation.turnIndex,
-            decision: conversation.decision,
-            stopReason: conversation.stopReason,
-            final: conversation.final,
-            finalize: conversation.final
-          }
-        },
-        ownerReport: {
-          ...ownerReport,
-          incomingSkillHint,
-          selectedSkill: parsed.selectedSkill,
-          conversationKey,
-          runtimeAdapter: 'hermes',
-          hermesConversation: hermesConversationName('agentsquared:work', localAgentId, remoteAgentId, conversationKey, `${conversationControl.turnIndex}`),
-          hermesApiBase: detection.apiBase,
-          turnIndex: conversation.turnIndex,
-          decision: conversation.decision,
-          stopReason: conversation.stopReason,
-          final: conversation.final,
-          finalize: conversation.final
+        parsed,
+        runtimeMetadata: {
+          hermesConversation,
+          hermesApiBase: detection.apiBase
         }
       }
-    }, { stage: 'Hermes inbound execution' })
-  }
+    }
+  })
 
   async function pushOwnerReport({
     item,
