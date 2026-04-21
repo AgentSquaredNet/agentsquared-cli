@@ -1680,6 +1680,7 @@ async function commandFriendMessage(args) {
   let continuationError = ''
   try {
     while (true) {
+      const turnSentAt = new Date().toISOString()
       result = await gatewayConnect(
         gatewayBase,
         {
@@ -1728,6 +1729,8 @@ async function commandFriendMessage(args) {
         turnIndex,
         outboundText: currentOutboundText,
         replyText,
+        sentAt: turnSentAt,
+        repliedAt: new Date().toISOString(),
         localDecision: currentOutboundControl.decision,
         localStopReason: currentOutboundControl.stopReason,
         remoteDecision: remoteControl.decision,
@@ -1895,6 +1898,8 @@ async function commandFriendMessage(args) {
     turnIndex: turn.turnIndex,
     outboundText: scrubOutboundText(turn.outboundText),
     replyText: scrubOutboundText(turn.replyText),
+    sentAt: turn.sentAt,
+    repliedAt: turn.repliedAt,
     localDecision: turn.localDecision,
     localStopReason: turn.localStopReason,
     remoteDecision: turn.remoteDecision,

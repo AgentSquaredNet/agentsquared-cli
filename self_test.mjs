@@ -82,11 +82,12 @@ for (const forbidden of [
   'Detailed' + ' conversation',
   'Actions' + ' taken',
   'Content' + ' sent',
-  'Stopped' + ' with reason'
+  'Stopped' + ' with reason',
+  'Transport' + ' Session'
 ]) {
   assert(!rendered.includes(forbidden), `old report template phrase is still present: ${forbidden}`)
 }
-for (const required of ['Conversation result', 'Conversation ID', 'Overall summary', 'Conversation details', 'Full conversation']) {
+for (const required of ['Conversation result', 'Conversation ID', 'Sender:', 'Recipient:', 'Status:', 'Time:', 'Skill:', 'Overall summary', 'Conversation details', 'Full conversation', 'Send:', 'Reply:']) {
   assert(rendered.includes(required), `new report template phrase is missing: ${required}`)
 }
 
