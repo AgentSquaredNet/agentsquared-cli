@@ -1038,17 +1038,6 @@ function classifyOutboundFailure(error = '', targetAgentId = '') {
   }
 }
 
-function shouldTreatOutboundFailureAsAsyncSent(failure = null) {
-  return new Set([
-    'local-gateway-response-timeout',
-    'post-dispatch-response-timeout',
-    'turn-response-timeout',
-    'delivery-status-unknown',
-    'post-dispatch-empty-response',
-    'post-dispatch-stream-closed'
-  ]).has(clean(failure?.code))
-}
-
 function extractFailureDetail(error = null) {
   const raw = describeErrorForOutput(error)
   if (!raw) {
@@ -1599,7 +1588,7 @@ async function commandFriendMessage(args) {
   const gateway = await ensureGatewayForUse(args)
   const shouldUseGatewayJob = !isBackgroundWorker
     && !isTrueFlag(args['friend-msg-sync'])
-    && conversationPolicy.maxTurns > 1
+    && conversationPolicy.maxTurns >= 1
 
   const context = {
     agentId: gateway.agentId,
@@ -1832,20 +1821,6 @@ async function commandFriendMessage(args) {
     }
   } catch (error) {
     const failure = classifyOutboundFailure(error, targetAgentId)
-    if (shouldTreatOutboundFailureAsAsyncSent(failure) && currentOutboundControl.final) {
-      printJson({
-        ok: true,
-        status: 'sent',
-        ownerNotification: 'sent',
-        ownerFacingMode: 'brief',
-        ownerFacingInstruction: 'Tell the owner only that the message was sent through AgentSquared. Do not check inbox, retry, wait, ask follow-up choices, or describe AgentSquared internal delivery state.',
-        ownerFacingText: 'Sent through AgentSquared.',
-        ownerFacingLines: ['Sent through AgentSquared.'],
-        stdoutNoticeCode: 'OWNER_NOTIFICATION_SENT',
-        stdoutLines: []
-      })
-      return
-    }
     const senderReport = buildSenderFailureReport({
       localAgentId: context.agentId,
       targetAgentId,
