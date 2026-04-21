@@ -14,12 +14,12 @@ function assert(condition, message) {
   }
 }
 
-assert(normalizeAgentSquaredAgentId('A2:Claw@Skiyo') === 'claw@skiyo', 'A2-prefixed AgentSquared ID should provide a lowercase comparison key')
-assert(normalizeAgentSquaredAgentId('claw@Skiyo') === 'claw@skiyo', 'bare AgentSquared ID should provide a lowercase comparison key')
-assert(agentSquaredAgentIdForWire('A2:Claw@Skiyo') === 'Claw@Skiyo', 'wire AgentSquared ID should strip A2 prefix without lowercasing signed identity')
-assert(parseAgentSquaredAgentId('A2:Claw@Skiyo').platformExplicit === true, 'A2-prefixed AgentSquared ID should record explicit platform context')
+assert(normalizeAgentSquaredAgentId('A2:Helper@ExampleOwner') === 'helper@exampleowner', 'A2-prefixed AgentSquared ID should provide a lowercase comparison key')
+assert(normalizeAgentSquaredAgentId('helper@ExampleOwner') === 'helper@exampleowner', 'bare AgentSquared ID should provide a lowercase comparison key')
+assert(agentSquaredAgentIdForWire('A2:Helper@ExampleOwner') === 'Helper@ExampleOwner', 'wire AgentSquared ID should strip A2 prefix without lowercasing signed identity')
+assert(parseAgentSquaredAgentId('A2:Helper@ExampleOwner').platformExplicit === true, 'A2-prefixed AgentSquared ID should record explicit platform context')
 try {
-  normalizeAgentSquaredAgentId('feishu:claw@Skiyo')
+  normalizeAgentSquaredAgentId('feishu:helper@ExampleOwner')
   assert(false, 'communication-channel targets must not be accepted as AgentSquared Agent IDs')
 } catch (error) {
   assert(String(error?.message || '').includes('AgentSquared ID'), 'wrong validation error for non-A2 channel target')
@@ -41,8 +41,8 @@ const turns = [
 ]
 
 const sender = buildSenderBaseReport({
-  localAgentId: 'hermes@Jessica',
-  targetAgentId: 'claw@Skiyo',
+  localAgentId: 'guide@ExampleUser',
+  targetAgentId: 'helper@ExampleOwner',
   selectedSkill: 'agent-mutual-learning',
   receiverSkill: 'agent-mutual-learning',
   sentAt: '2026-04-20T01:00:00.000Z',
@@ -56,8 +56,8 @@ const sender = buildSenderBaseReport({
 })
 
 const receiver = buildReceiverBaseReport({
-  localAgentId: 'claw@Skiyo',
-  remoteAgentId: 'hermes@Jessica',
+  localAgentId: 'helper@ExampleOwner',
+  remoteAgentId: 'guide@ExampleUser',
   incomingSkillHint: 'agent-mutual-learning',
   selectedSkill: 'agent-mutual-learning',
   conversationKey: 'conversation_smoke',
@@ -95,12 +95,12 @@ const inboxDir = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-inbox-smoke-'))
 try {
 const store = createInboxStore({ inboxDir })
   const { entry } = store.appendEntry({
-    agentId: 'hermes@Jessica',
+    agentId: 'guide@ExampleUser',
     selectedSkill: 'agent-mutual-learning',
     mailboxKey: 'outbound:conversation_smoke',
     item: {
       inboundId: 'entry_smoke',
-      remoteAgentId: 'claw@Skiyo'
+      remoteAgentId: 'helper@ExampleOwner'
     },
     ownerReport: {
       ...sender,
@@ -114,7 +114,7 @@ const store = createInboxStore({ inboxDir })
     }
   })
   assert(entry.conversationKey === 'conversation_smoke', 'sender owner report was not indexed by conversation key')
-  assert(entry.remoteAgentId === 'claw@Skiyo', 'sender owner report did not normalize the remote agent id')
+  assert(entry.remoteAgentId === 'helper@ExampleOwner', 'sender owner report did not normalize the remote agent id')
   assert(entry.messageExcerpt.includes('Please compare'), 'sender owner report did not expose the outbound message excerpt')
   assert(entry.replyExcerpt.includes('compact reports'), 'sender owner report did not expose the reply excerpt')
   const found = store.findConversation('conversation_smoke')
@@ -126,7 +126,7 @@ const store = createInboxStore({ inboxDir })
     conversationKey: 'conversation_inbound_smoke'
   }
   const inbound = store.appendEntry({
-    agentId: 'claw@Skiyo',
+    agentId: 'helper@ExampleOwner',
     selectedSkill: 'agent-mutual-learning',
     mailboxKey: 'inbound:conversation_inbound_smoke',
     item: {
@@ -154,7 +154,7 @@ const store = createInboxStore({ inboxDir })
     }
   })
   assert(inbound.entry.conversationKey === 'conversation_inbound_smoke', 'receiver owner report was not indexed by conversation key')
-  assert(inbound.entry.remoteAgentId === 'hermes@Jessica', 'receiver owner report did not normalize the remote agent id')
+  assert(inbound.entry.remoteAgentId === 'guide@ExampleUser', 'receiver owner report did not normalize the remote agent id')
   assert(store.findConversation('conversation_inbound_smoke')?.finalEntry?.ownerReport?.conversationKey === 'conversation_inbound_smoke', 'receiver conversation lookup failed')
 } finally {
   fs.rmSync(inboxDir, { recursive: true, force: true })
