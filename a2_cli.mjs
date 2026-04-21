@@ -870,10 +870,30 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function isLocalTransportReadinessError(error = null) {
+  const lower = describeErrorForOutput(error).toLowerCase()
+  return Boolean(
+    lower.includes('local gateway is not ready')
+    || lower.includes('waiting for relay reservation-backed transport')
+    || lower.includes('gateway transport is unavailable')
+    || lower.includes('no direct or relay-backed addresses were published')
+  )
+}
+
 function classifyOutboundFailure(error = '', targetAgentId = '') {
   const failureKind = clean(typeof error === 'object' && error != null ? error.a2FailureKind : '')
   const message = describeErrorForOutput(error)
   const lower = message.toLowerCase()
+  if (failureKind === 'local-gateway-transport-not-ready' || isLocalTransportReadinessError(error)) {
+    return {
+      code: 'local-gateway-transport-not-ready',
+      deliveryStatus: 'failed',
+      failureStage: 'pre-dispatch / local-transport-not-ready',
+      confirmationLevel: 'request was not dispatched to the remote peer',
+      reason: 'The local AgentSquared gateway had not published a direct or relay-backed transport address yet. Delivery was stopped before dispatch instead of guessing.',
+      nextStep: 'Do not switch targets or retry automatically. Tell the owner the local AgentSquared gateway transport is still reconnecting; retry this same target after the gateway is healthy.'
+    }
+  }
   if (failureKind === 'post-dispatch-empty-response') {
     return {
       code: 'post-dispatch-empty-response',
