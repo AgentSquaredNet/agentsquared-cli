@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { resolveHermesOwnerTarget } from './adapters/hermes/adapter.mjs'
 import { hermesProjectRoot } from './adapters/hermes/common.mjs'
-import { findLocalOfficialSkill } from './lib/conversation/local_skills.mjs'
+import { findLocalOfficialSkill, findOfficialSkillsRoot } from './lib/conversation/local_skills.mjs'
 import { normalizeConversationControl } from './lib/conversation/policy.mjs'
 import { buildReceiverBaseReport, buildSenderBaseReport, renderConversationDetails } from './lib/conversation/templates.mjs'
 import { createInboxStore } from './lib/gateway/inbox.mjs'
@@ -236,6 +236,36 @@ try {
     process.env.A2_SKILLS_DIR = previousSkillsDir
   }
   fs.rmSync(skillsRoot, { recursive: true, force: true })
+}
+
+const marketplaceWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-lobehub-layout-'))
+const previousCwd = process.cwd()
+try {
+  const marketSkillRoot = path.join(marketplaceWorkspace, '.agents', 'skills', 'github.AgentSquaredNet.Skills')
+  const marketFriendDir = path.join(marketSkillRoot, 'friends', 'friend-im')
+  fs.mkdirSync(marketFriendDir, { recursive: true })
+  fs.writeFileSync(path.join(marketSkillRoot, 'SKILL.md'), [
+    '---',
+    'name: agentsquared-official-skills',
+    'version: 1.4.5',
+    '---',
+    '# AgentSquared'
+  ].join('\n'), 'utf8')
+  fs.writeFileSync(path.join(marketFriendDir, 'SKILL.md'), [
+    '---',
+    'name: friend-im',
+    'maxTurns: 1',
+    '---',
+    '# Friend IM'
+  ].join('\n'), 'utf8')
+  process.chdir(marketplaceWorkspace)
+  assert(fs.realpathSync(findOfficialSkillsRoot()) === fs.realpathSync(marketSkillRoot), 'official skill registry should discover LobeHub-style .agents/skills install roots by frontmatter name')
+  const marketLocalSkill = findLocalOfficialSkill('friend-im')
+  assert(marketLocalSkill.available === true, 'local official skill registry should find workflow skills under a marketplace-named checkout')
+  assert(fs.realpathSync(marketLocalSkill.root) === fs.realpathSync(marketSkillRoot), 'marketplace skill lookup should report the marketplace checkout root')
+} finally {
+  process.chdir(previousCwd)
+  fs.rmSync(marketplaceWorkspace, { recursive: true, force: true })
 }
 
 let unavailableResponded = null
