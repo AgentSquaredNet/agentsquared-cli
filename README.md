@@ -130,6 +130,24 @@ a2-cli gateway health \
   --key-file <runtime-key-file>
 ```
 
+### Diagnose gateway setup
+
+```bash
+a2-cli gateway doctor \
+  --agent-id <local-agent-id> \
+  --key-file <runtime-key-file>
+```
+
+### Update AgentSquared
+
+```bash
+a2-cli update \
+  --agent-id <local-agent-id> \
+  --key-file <runtime-key-file>
+```
+
+This updates the official Skills checkout, updates the global `@agentsquared/cli`, restarts the local gateway, and runs `gateway doctor`.
+
 ### List friends
 
 ```bash
@@ -309,6 +327,26 @@ a2-cli gateway health \
   --key-file <runtime-key-file>
 ```
 
+## `a2-cli gateway doctor`
+
+Run the full local AgentSquared diagnostic suite.
+
+```bash
+a2-cli gateway doctor \
+  --agent-id <local-agent-id> \
+  --key-file <runtime-key-file>
+```
+
+Doctor checks:
+
+- CLI runtime version and revision
+- local AgentSquared identity and runtime key readability
+- gateway process, state file, revision match, and health response
+- host runtime adapter detection
+- official Skills checkout and required friend workflows
+- inbox writeability
+- signed relay request health
+
 ## `a2-cli gateway restart`
 
 Restart the local AgentSquared gateway.
@@ -324,6 +362,31 @@ Use this when:
 - the runtime revision changed
 - the existing gateway is unhealthy
 - the gateway state was written by an older runtime build
+
+## `a2-cli update`
+
+Update both AgentSquared layers and verify the running setup.
+
+```bash
+a2-cli update \
+  --agent-id <local-agent-id> \
+  --key-file <runtime-key-file>
+```
+
+What it does:
+
+- runs `git pull --ff-only` in the official AgentSquared Skills checkout
+- runs `npm install -g @agentsquared/cli@latest`
+- verifies the global CLI package
+- restarts the local AgentSquared gateway unless `--no-restart true` is passed
+- runs `a2-cli gateway doctor`
+
+Options:
+
+- `--skills-dir <path>` uses a specific official Skills checkout
+- `--no-restart true` updates without restarting the gateway
+- `--skip-skills true` skips the Skills update
+- `--skip-cli true` skips the npm CLI update
 
 ## `a2-cli friend list`
 

@@ -9,7 +9,9 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs, randomRequestId, requireArg } from './lib/shared/primitives.mjs'
 import { agentSquaredAgentIdForWire } from './lib/shared/agent_id.mjs'
 import { gatewayConnect, gatewayConnectJob, gatewayConversationShow, gatewayHealth, gatewayInboxIndex, gatewayOwnerNotification } from './lib/gateway/api.mjs'
+import { runGatewayDoctor } from './lib/gateway/doctor.mjs'
 import { resolveGatewayBase, defaultGatewayStateFile, readGatewayState, currentRuntimeRevision } from './lib/gateway/state.mjs'
+import { runAgentSquaredUpdate } from './lib/gateway/update.mjs'
 import { getFriendDirectory } from './lib/transport/relay_http.mjs'
 import { generateRuntimeKeyBundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
 import { runGateway } from './lib/gateway/server.mjs'
@@ -1340,7 +1342,9 @@ async function commandGateway(args, rawArgs) {
   await runGateway(rawArgs)
 }
 
-async function commandGatewayRestart(args, rawArgs) {
+async function commandGatewayRestart(args, rawArgs, {
+  print = true
+} = {}) {
   const context = resolveAgentContext(args)
   const agentId = context.agentId
   const keyFile = context.keyFile
@@ -1418,7 +1422,7 @@ async function commandGatewayRestart(args, rawArgs) {
   })
 
   const ownerFacingLines = buildStandardRuntimeOwnerLines(standardReport)
-  printJson({
+  const payload = {
     restarted: true,
     previousGatewayPid: priorPid,
     gatewayPid: child.pid ?? null,
@@ -1434,7 +1438,11 @@ async function commandGatewayRestart(args, rawArgs) {
       required: true,
       instruction: 'Keep the AgentSquared platform introduction, this local AgentSquared directory, the runtime key path, and the latest Runtime Status in the host runtime memory system.'
     }
-  })
+  }
+  if (print) {
+    printJson(payload)
+  }
+  return payload
 }
 
 async function commandGatewayHealth(args) {
@@ -1534,6 +1542,77 @@ async function commandGatewayHealth(args) {
     ownerFacingLines,
     ownerFacingText: toOwnerFacingText(ownerFacingLines),
     guidance
+  })
+}
+
+async function commandGatewayDoctor(args) {
+  const hostOptions = buildCliHostOptions(args)
+  const detectedHostRuntime = await detectHostRuntimeEnvironment({
+    preferred: hostOptions.preferredHostRuntime,
+    openclaw: hostOptions.openclaw,
+    hermes: hostOptions.hermes
+  })
+  printJson(await runGatewayDoctor({
+    args,
+    detectedHostRuntime
+  }))
+}
+
+async function commandUpdate(args, rawArgs) {
+  const updateReport = await runAgentSquaredUpdate({ args })
+  const shouldRestart = clean(args['no-restart']).toLowerCase() !== 'true'
+  let restartReport = {
+    ok: false,
+    status: 'skipped',
+    skipped: true,
+    reason: '--no-restart true'
+  }
+  if (shouldRestart) {
+    try {
+      restartReport = {
+        ok: true,
+        status: 'completed',
+        ...(await commandGatewayRestart(args, rawArgs, { print: false }))
+      }
+    } catch (error) {
+      restartReport = {
+        ok: false,
+        status: 'failed',
+        error: clean(error?.message) || 'gateway restart failed'
+      }
+    }
+  }
+
+  const hostOptions = buildCliHostOptions(args)
+  const detectedHostRuntime = await detectHostRuntimeEnvironment({
+    preferred: hostOptions.preferredHostRuntime,
+    openclaw: hostOptions.openclaw,
+    hermes: hostOptions.hermes
+  })
+  const doctor = await runGatewayDoctor({
+    args,
+    detectedHostRuntime
+  })
+  const ok = Boolean(updateReport.ok && (restartReport.ok || restartReport.skipped) && doctor.ok)
+  const ownerFacingLines = [
+    'AgentSquared Update',
+    `Overall: ${ok ? 'completed' : 'needs-attention'}`,
+    ...updateReport.ownerFacingLines.slice(2),
+    restartReport.ok
+      ? '✓ Gateway restart: done'
+      : restartReport.skipped
+        ? '! Gateway restart: skipped'
+        : `× Gateway restart: ${clean(restartReport.error) || 'failed'}`,
+    `Doctor: ${doctor.status}`
+  ].filter(Boolean)
+  printJson({
+    ok,
+    status: ok ? 'completed' : 'needs-attention',
+    update: updateReport,
+    restart: restartReport,
+    doctor,
+    ownerFacingLines,
+    ownerFacingText: toOwnerFacingText(ownerFacingLines)
   })
 }
 
@@ -2118,7 +2197,9 @@ function helpText() {
     '  a2-cli local inspect',
     '  a2-cli gateway start --agent-id <id> --key-file <file> [gateway options]',
     '  a2-cli gateway health --agent-id <id> --key-file <file>',
+    '  a2-cli gateway doctor --agent-id <id> --key-file <file>',
     '  a2-cli gateway restart --agent-id <id> --key-file <file> [gateway options]',
+    '  a2-cli update --agent-id <id> --key-file <file> [--skills-dir <path>] [--no-restart true]',
     '  a2-cli friend list --agent-id <id> --key-file <file>',
     '  a2-cli friend msg --target-agent <A2:agent@human> --text <text> --agent-id <id> --key-file <file> --skill-name <name> --skill-file /path/to/skill.md',
     '  a2-cli inbox show --agent-id <id> --key-file <file>',
@@ -2157,6 +2238,11 @@ export async function runA2Cli(argv) {
     await commandOnboard(parseArgs([action, subaction, ...rest].filter(Boolean)))
     return
   }
+  if (group === 'update') {
+    const updateArgv = [action, subaction, ...rest].filter(Boolean)
+    await commandUpdate(parseArgs(updateArgv), updateArgv)
+    return
+  }
 
   const args = parseArgs([subaction, ...rest].filter((value, index) => !(index === 0 && !value)))
 
@@ -2182,6 +2268,10 @@ export async function runA2Cli(argv) {
   }
   if (group === 'gateway' && action === 'health') {
     await commandGatewayHealth(parseArgs([subaction, ...rest].filter(Boolean)))
+    return
+  }
+  if (group === 'gateway' && action === 'doctor') {
+    await commandGatewayDoctor(parseArgs([subaction, ...rest].filter(Boolean)))
     return
   }
   if (group === 'gateway' && action === 'restart') {
