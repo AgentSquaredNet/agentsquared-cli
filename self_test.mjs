@@ -4,8 +4,11 @@ import path from 'node:path'
 
 import { resolveHermesOwnerTarget } from './adapters/hermes/adapter.mjs'
 import { hermesProjectRoot } from './adapters/hermes/common.mjs'
+import { findLocalOfficialSkill } from './lib/conversation/local_skills.mjs'
+import { normalizeConversationControl } from './lib/conversation/policy.mjs'
 import { buildReceiverBaseReport, buildSenderBaseReport, renderConversationDetails } from './lib/conversation/templates.mjs'
 import { createInboxStore } from './lib/gateway/inbox.mjs'
+import { createAgentRouter } from './lib/routing/agent_router.mjs'
 import { agentSquaredAgentIdForWire, normalizeAgentSquaredAgentId, parseAgentSquaredAgentId } from './lib/shared/agent_id.mjs'
 
 function assert(condition, message) {
@@ -90,6 +93,7 @@ for (const forbidden of [
 for (const required of ['Conversation result', 'Conversation ID', 'Sender:', 'Recipient:', 'Status:', 'Time:', 'Skill:', 'Overall summary', 'Conversation details', 'Full conversation', 'Send:', 'Reply:']) {
   assert(rendered.includes(required), `new report template phrase is missing: ${required}`)
 }
+assert(normalizeConversationControl({ stopReason: 'skill-unavailable', decision: 'done' }).stopReason === 'skill-unavailable', 'skill-unavailable must be preserved as a final conversation status')
 
 const inboxDir = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-inbox-smoke-'))
 try {
@@ -207,5 +211,73 @@ try {
 } finally {
   fs.rmSync(hermesInstall, { recursive: true, force: true })
 }
+
+const skillsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-skills-root-'))
+const previousSkillsDir = process.env.A2_SKILLS_DIR
+try {
+  const friendSkillDir = path.join(skillsRoot, 'friends', 'friend-im')
+  fs.mkdirSync(friendSkillDir, { recursive: true })
+  fs.writeFileSync(path.join(friendSkillDir, 'SKILL.md'), [
+    '---',
+    'name: friend-im',
+    'maxTurns: 1',
+    '---',
+    '# Friend IM'
+  ].join('\n'), 'utf8')
+  process.env.A2_SKILLS_DIR = skillsRoot
+  const localSkill = findLocalOfficialSkill('friend-im')
+  assert(localSkill.available === true, 'local official skill registry should find installed skill by skillHint')
+  assert(localSkill.maxTurns === 1, 'local official skill registry should read maxTurns from local frontmatter')
+  assert(findLocalOfficialSkill('missing-skill').available === false, 'missing local official skill should be unavailable')
+} finally {
+  if (previousSkillsDir == null) {
+    delete process.env.A2_SKILLS_DIR
+  } else {
+    process.env.A2_SKILLS_DIR = previousSkillsDir
+  }
+  fs.rmSync(skillsRoot, { recursive: true, force: true })
+}
+
+let unavailableResponded = null
+let unavailableNotified = null
+let unavailableExecuted = false
+const unavailableRouter = createAgentRouter({
+  localAgentId: 'helper@ExampleOwner',
+  executeInbound: async () => {
+    unavailableExecuted = true
+    throw new Error('missing skill should not call host runtime')
+  },
+  resolveLocalSkill: () => ({ available: false, name: 'missing-skill', reason: 'local-official-skill-not-found' }),
+  onRespond: async (_item, response) => {
+    unavailableResponded = response
+  },
+  onReject: async () => {
+    throw new Error('skill-unavailable should return a final peer response, not reject transport')
+  },
+  notifyOwner: async (payload) => {
+    unavailableNotified = payload
+  }
+})
+await unavailableRouter.enqueue({
+  inboundId: 'missing_skill_smoke',
+  remoteAgentId: 'guide@ExampleUser',
+  suggestedSkill: 'missing-skill',
+  request: {
+    params: {
+      metadata: {
+        conversationKey: 'conversation_missing_skill',
+        sentAt: '2026-04-20T01:00:00.000Z',
+        turnIndex: 1
+      },
+      message: {
+        parts: [{ kind: 'text', text: 'Please use the missing skill.' }]
+      }
+    }
+  }
+})
+assert(unavailableExecuted === false, 'missing local official skill should not invoke the host runtime')
+assert(unavailableResponded?.metadata?.stopReason === 'skill-unavailable', 'missing local official skill should send a final skill-unavailable peer response')
+assert(unavailableResponded?.metadata?.final === true, 'skill-unavailable peer response should be final so the sender can notify its owner')
+assert(unavailableNotified?.conversation?.stopReason === 'skill-unavailable', 'receiver owner notification should preserve skill-unavailable status')
 
 console.log('AgentSquared CLI self-test ok')

@@ -32,7 +32,7 @@ import { buildStandardRuntimeOwnerLines, buildStandardRuntimeReport } from './li
 import { chooseInboundSkill, resolveMailboxKey } from './lib/routing/agent_router.mjs'
 import { createLocalRuntimeExecutor } from './lib/runtime/executor.mjs'
 import { createLiveConversationStore } from './lib/conversation/store.mjs'
-import { normalizeConversationControl, normalizeSharedSkillName, parseSkillDocumentPolicy, resolveConversationMaxTurns, shouldContinueConversation } from './lib/conversation/policy.mjs'
+import { clampConversationMaxTurns, normalizeConversationControl, normalizeSharedSkillName, parseSkillDocumentPolicy, shouldContinueConversation } from './lib/conversation/policy.mjs'
 import {
   assertNoExistingLocalActivation,
   buildGatewayArgs,
@@ -438,7 +438,7 @@ function walkLocalFiles(dirPath, out, depth = 0, maxDepth = 4) {
   }
 }
 
-function loadSharedSkillFile(skillFile) {
+function loadLocalSkillFile(skillFile) {
   const resolved = resolveUserPath(skillFile)
   const text = fs.readFileSync(resolved, 'utf8')
   const policy = parseSkillDocumentPolicy(text, {
@@ -450,8 +450,7 @@ function loadSharedSkillFile(skillFile) {
     maxTurns: policy.maxTurns,
     conversationPolicy: {
       maxTurns: policy.maxTurns
-    },
-    document: clean(text).slice(0, 16000)
+    }
   }
 }
 
@@ -469,13 +468,13 @@ function reportMissingFriendWorkflow({
   printJson({
     ok: false,
     error: {
-      code: 'shared-workflow-required',
+      code: 'local-official-skill-required',
       message: `AgentSquared friend messaging requires ${missing.join(' and ')} from the upper skill layer.`,
-      detail: 'Do not send a bare a2-cli friend msg. Read the installed AgentSquared root skill, choose the correct shared workflow, then retry with both --skill-name and an absolute --skill-file path.'
+      detail: 'Do not send a bare a2-cli friend msg. Read the installed AgentSquared root skill, choose the correct local official workflow, then retry with both --skill-name and an absolute --skill-file path.'
     },
     ownerNotification: 'not-sent',
     ownerFacingMode: 'internal-retry',
-    ownerFacingInstruction: 'Do not report this internal CLI failure to the owner yet. Read the AgentSquared skill, select the correct shared workflow, and retry the same owner request with both --skill-name and --skill-file.',
+    ownerFacingInstruction: 'Do not report this internal CLI failure to the owner yet. Read the AgentSquared skill, select the correct local official workflow, and retry the same owner request with both --skill-name and --skill-file.',
     stdoutLines: []
   })
   process.exitCode = 1
@@ -483,15 +482,15 @@ function reportMissingFriendWorkflow({
 
 function reportMismatchedFriendWorkflow({
   explicitSkillName = '',
-  sharedSkillName = '',
+  localSkillName = '',
   skillFile = ''
 } = {}) {
   printJson({
     ok: false,
     error: {
-      code: 'shared-workflow-mismatch',
-      message: `AgentSquared workflow mismatch: --skill-name "${clean(explicitSkillName)}" does not match --skill-file frontmatter name "${clean(sharedSkillName)}".`,
-      detail: `Use the shared workflow name declared by ${clean(skillFile) || 'the skill file'}, or pass the matching workflow file.`
+      code: 'local-official-skill-mismatch',
+      message: `AgentSquared workflow mismatch: --skill-name "${clean(explicitSkillName)}" does not match --skill-file frontmatter name "${clean(localSkillName)}".`,
+      detail: `Use the local official workflow name declared by ${clean(skillFile) || 'the skill file'}, or pass the matching workflow file.`
     },
     ownerNotification: 'not-sent',
     ownerFacingMode: 'internal-retry',
@@ -539,13 +538,9 @@ function extractPeerResponseMetadata(response = null) {
     : {}
 }
 
-function resolveOutboundConversationPolicy(sharedSkill = null) {
+function resolveOutboundConversationPolicy(localSkill = null) {
   return {
-    maxTurns: resolveConversationMaxTurns({
-      conversationPolicy: sharedSkill?.conversationPolicy ?? { maxTurns: sharedSkill?.maxTurns },
-      sharedSkill,
-      fallback: 1
-    })
+    maxTurns: clampConversationMaxTurns(localSkill?.conversationPolicy?.maxTurns ?? localSkill?.maxTurns, 1)
   }
 }
 
@@ -670,7 +665,6 @@ async function executeLocalConversationTurn({
   peerSessionId,
   conversationKey,
   skillHint,
-  sharedSkill,
   conversationPolicy,
   inboundText,
   originalOwnerText = '',
@@ -699,7 +693,6 @@ async function executeLocalConversationTurn({
           parts: [{ kind: 'text', text: clean(inboundText) }]
         },
         metadata: {
-          ...(sharedSkill ? { sharedSkill } : {}),
           ...(conversationPolicy ? { conversationPolicy } : {}),
           from: targetAgentId,
           to: localAgentId,
@@ -1295,7 +1288,7 @@ async function commandOnboard(args) {
       'Store the AgentSquared platform intro, this AgentSquared directory, the runtime key path, and the latest Runtime Status in the host runtime memory system.',
       `Inbox audit path: ${inboxDir}.`,
       'AgentSquared, A², and A2 all mean the same platform.',
-      'You can now ask this agent to check AgentSquared status, view friends, read inbox items, send trusted friend messages, and run shared friend workflows such as friend IM or mutual learning.',
+      'You can now ask this agent to check AgentSquared status, view friends, read inbox items, send trusted friend messages, and run official friend workflows such as friend IM or mutual learning.',
       'CLI commands are internal runtime tools for the skill layer and do not need to be shown to the owner unless requested.',
       'Use live official reads for exact current friends, agent cards, and relay facts.',
       ...buildStandardRuntimeOwnerLines(standardReport)
@@ -1563,26 +1556,26 @@ async function commandFriendMessage(args) {
   const ownerLanguage = inferOwnerFacingLanguage(text)
   const ownerTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
   const skillFile = clean(args['skill-file'])
-  const sharedSkill = skillFile ? loadSharedSkillFile(skillFile) : null
+  const localSkill = skillFile ? loadLocalSkillFile(skillFile) : null
   const explicitSkillName = clean(args['skill-name'] || args.skill)
-  if (!explicitSkillName || !skillFile || !sharedSkill?.name) {
+  if (!explicitSkillName || !skillFile || !localSkill?.name) {
     reportMissingFriendWorkflow({ explicitSkillName, skillFile })
     return
   }
-  if (normalizeSharedSkillName(explicitSkillName) !== normalizeSharedSkillName(sharedSkill.name)) {
+  if (normalizeSharedSkillName(explicitSkillName) !== normalizeSharedSkillName(localSkill.name)) {
     reportMismatchedFriendWorkflow({
       explicitSkillName,
-      sharedSkillName: sharedSkill.name,
+      localSkillName: localSkill.name,
       skillFile
     })
     return
   }
-  const skillHint = clean(explicitSkillName) || clean(sharedSkill?.name)
+  const skillHint = clean(explicitSkillName) || clean(localSkill?.name)
   const skillDecision = {
-    source: explicitSkillName ? 'explicit' : sharedSkill?.name ? 'shared-skill' : 'none',
-    reason: explicitSkillName ? 'explicit-skill-arg' : sharedSkill?.name ? 'shared-skill-file' : 'no-skill-hint'
+    source: explicitSkillName ? 'explicit' : localSkill?.name ? 'local-official-skill' : 'none',
+    reason: explicitSkillName ? 'explicit-skill-arg' : localSkill?.name ? 'local-official-skill-file' : 'no-skill-hint'
   }
-  const conversationPolicy = resolveOutboundConversationPolicy(sharedSkill)
+  const conversationPolicy = resolveOutboundConversationPolicy(localSkill)
   const isBackgroundWorker = isTrueFlag(args['background-worker'])
 
   const gateway = await ensureGatewayForUse(args)
@@ -1627,7 +1620,6 @@ async function commandFriendMessage(args) {
           parts: [{ kind: 'text', text: outboundText }]
         },
         metadata: {
-          ...(sharedSkill ? { sharedSkill } : {}),
           conversationPolicy,
           originalOwnerText: text,
           conversationKey,
@@ -1712,7 +1704,6 @@ async function commandFriendMessage(args) {
             parts: [{ kind: 'text', text: currentOutboundText }]
           },
           metadata: {
-            ...(sharedSkill ? { sharedSkill } : {}),
             conversationPolicy,
             originalOwnerText: turnIndex === 1 ? text : currentOutboundText,
             conversationKey,
@@ -1785,7 +1776,6 @@ async function commandFriendMessage(args) {
           peerSessionId: result.peerSessionId,
           conversationKey,
           skillHint,
-          sharedSkill,
           conversationPolicy,
           inboundText: replyText,
           originalOwnerText: text,
