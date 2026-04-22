@@ -247,7 +247,7 @@ try {
   fs.writeFileSync(path.join(marketSkillRoot, 'SKILL.md'), [
     '---',
     'name: agentsquared-official-skills',
-    'version: 1.4.5',
+    'version: 1.5.0',
     '---',
     '# AgentSquared'
   ].join('\n'), 'utf8')
