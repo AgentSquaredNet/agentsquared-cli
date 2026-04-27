@@ -1683,6 +1683,7 @@ async function commandFriendMessage(args) {
     targetAgentId,
     skillName: skillHint,
     originalText: text,
+    conversationKey,
     sentAt
   })
 
@@ -2098,6 +2099,42 @@ async function commandInboxShow(args) {
   printJson(await gatewayInboxIndex(gatewayBase))
 }
 
+async function commandH2AUnread(args) {
+  const gateway = await ensureGatewayForUse(args)
+  const inbox = await gatewayInboxIndex(gateway.gatewayBase)
+  const recent = Array.isArray(inbox?.index?.recent) ? inbox.index.recent : []
+  const sessions = new Map()
+  for (const item of recent) {
+    const selectedSkill = clean(item?.selectedSkill)
+    const channelKind = clean(item?.request?.params?.metadata?.channelKind)
+    if (selectedSkill !== 'human-agent-chat' && channelKind !== 'h2a') {
+      continue
+    }
+    const sessionId = clean(item?.conversationKey || item?.request?.params?.metadata?.h2aSessionId || item?.peerSessionId)
+    if (!sessionId) {
+      continue
+    }
+    const existing = sessions.get(sessionId) ?? {
+      sessionId,
+      remoteHuman: clean(item?.request?.params?.metadata?.fromHuman) || clean(item?.remoteAgentId),
+      targetAgentId: args['agent-id'] || gateway.agentId,
+      unreadMessages: 0,
+      lastActivityAt: ''
+    }
+    existing.unreadMessages += 1
+    existing.lastActivityAt = clean(item?.updatedAt || item?.createdAt) || existing.lastActivityAt
+    sessions.set(sessionId, existing)
+  }
+  const items = [...sessions.values()].sort((left, right) => clean(right.lastActivityAt).localeCompare(clean(left.lastActivityAt)))
+  printJson({
+    ok: true,
+    agentId: gateway.agentId,
+    h2aUnreadSessions: Number(inbox?.snapshot?.h2aUnreadSessions ?? items.length) || 0,
+    h2aUnreadMessages: Number(inbox?.snapshot?.h2aUnreadMessages ?? items.reduce((sum, item) => sum + item.unreadMessages, 0)) || 0,
+    items
+  })
+}
+
 async function commandConversationShow(args) {
   const conversationId = requireArg(args['conversation-id'] || args.id, '--conversation-id is required')
   const gateway = await ensureGatewayForUse(args)
@@ -2202,6 +2239,7 @@ function helpText() {
     '  a2-cli update --agent-id <id> --key-file <file> [--skills-dir <path>] [--no-restart true]',
     '  a2-cli friend list --agent-id <id> --key-file <file>',
     '  a2-cli friend msg --target-agent <A2:agent@human> --text <text> --agent-id <id> --key-file <file> --skill-name <name> --skill-file /path/to/skill.md',
+    '  a2-cli h2a unread --agent-id <id> --key-file <file>',
     '  a2-cli inbox show --agent-id <id> --key-file <file>',
     '  a2-cli conversation show --conversation-id <id> --agent-id <id> --key-file <file> [--no-notify true]',
     '',
@@ -2256,6 +2294,10 @@ export async function runA2Cli(argv) {
   }
   if (group === 'inbox' && (action === 'show' || action === 'index')) {
     await commandInboxShow(args)
+    return
+  }
+  if (group === 'h2a' && (action === 'unread' || action === 'status')) {
+    await commandH2AUnread(args)
     return
   }
   if ((group === 'conversation' || group === 'conversations') && (action === 'show' || action === 'detail' || action === 'details')) {
