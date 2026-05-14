@@ -2,8 +2,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { resolveHermesOwnerTarget } from './adapters/hermes/adapter.mjs'
 import { hermesProjectRoot } from './adapters/hermes/common.mjs'
+import { ensureHermesApiServerNoMcpConfig } from './adapters/hermes/env.mjs'
+import { probeHermesMcp, resolveHermesOwnerTargetViaMcp, sendHermesOwnerMessageViaMcp } from './adapters/hermes/mcp_client.mjs'
 import { findLocalOfficialSkill, findOfficialSkillsRoot } from './lib/conversation/local_skills.mjs'
 import { normalizeConversationControl } from './lib/conversation/policy.mjs'
 import { buildReceiverBaseReport, buildSenderBaseReport, renderConversationDetails } from './lib/conversation/templates.mjs'
@@ -164,36 +165,68 @@ const store = createInboxStore({ inboxDir })
   fs.rmSync(inboxDir, { recursive: true, force: true })
 }
 
-const hermesHome = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-hermes-session-export-'))
+const hermesHome = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-hermes-mcp-'))
 try {
-  fs.writeFileSync(path.join(hermesHome, '.env'), 'FEISHU_HOME_CHANNEL=oc_should_not_win\nTELEGRAM_HOME_CHANNEL=-1001\n', 'utf8')
-  const hermesProjectRoot = path.join(hermesHome, 'hermes-agent')
-  const hermesGatewayDir = path.join(hermesProjectRoot, 'gateway')
-  fs.mkdirSync(hermesGatewayDir, { recursive: true })
-  fs.writeFileSync(path.join(hermesGatewayDir, '__init__.py'), '', 'utf8')
-  fs.writeFileSync(path.join(hermesGatewayDir, 'channel_directory.py'), [
-    'def load_directory():',
-    '    return {',
-    '        "platforms": {',
-    '            "telegram": [{"id": "-1001", "name": "Owner Chat", "type": "dm"}]',
-    '        }',
-    '    }'
+  fs.writeFileSync(path.join(hermesHome, 'config.yaml'), [
+    'platform_toolsets:',
+    '  cli:',
+    '  - hermes-cli',
+    'code_execution:',
+    '  timeout: 300'
   ].join('\n'), 'utf8')
-  fs.writeFileSync(path.join(hermesProjectRoot, 'hermes_state.py'), [
-    'class SessionDB:',
-    '    def list_sessions_rich(self, exclude_sources=None, limit=20):',
-    '        rows = [{"id": f"internal_{idx}", "source": "api_server"} for idx in range(30)]',
-    '        rows.append({"id": "20260420_owner", "source": "telegram"})',
-    '        return rows[:limit]',
-    '    def resolve_session_id(self, session_id):',
-    '        return session_id',
-    '    def export_session(self, session_id):',
-    '        raise AssertionError("owner route resolution should not export full sessions")'
+  const configResult = ensureHermesApiServerNoMcpConfig(hermesHome)
+  const configText = fs.readFileSync(path.join(hermesHome, 'config.yaml'), 'utf8')
+  assert(configResult.changed === true, 'Hermes config should be updated with api_server no_mcp')
+  assert(configText.includes('  api_server:\n  - no_mcp\ncode_execution:'), 'Hermes api_server no_mcp should be inserted inside platform_toolsets')
+  assert(ensureHermesApiServerNoMcpConfig(hermesHome).changed === false, 'Hermes config no_mcp update should be idempotent')
+
+  const fakeMcp = path.join(hermesHome, 'fake-hermes-mcp.mjs')
+  fs.writeFileSync(fakeMcp, [
+    '#!/usr/bin/env node',
+    'function write(message) {',
+    '  process.stdout.write(`${JSON.stringify(message)}\\n`)',
+    '}',
+    'function payloadFor(name, args) {',
+    '  if (name === "conversations_list") return { count: 2, conversations: [',
+    '    { session_key: "internal", platform: "api_server", updated_at: "2026-04-20T01:02:00.000Z" },',
+    '    { session_key: "owner", platform: "telegram", display_name: "Owner Chat", updated_at: "2026-04-20T01:00:00.000Z" }',
+    '  ] }',
+    '  if (name === "conversation_get") return { session_key: args.session_key, session_id: "s_owner", platform: "telegram", chat_id: "-1001", display_name: "Owner Chat" }',
+    '  if (name === "channels_list") return { count: 1, channels: [{ target: "telegram:-1001", platform: "telegram", name: "Owner Chat" }] }',
+    '  if (name === "messages_send") return { success: true, target: args.target, message: args.message }',
+    '  return { error: `unexpected tool ${name}` }',
+    '}',
+    'function handle(message) {',
+    '  if (!message.id) return',
+    '  if (message.method === "initialize") return write({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "fake-hermes" } } })',
+    '  if (message.method === "tools/list") return write({ jsonrpc: "2.0", id: message.id, result: { tools: [',
+    '    { name: "conversations_list" }, { name: "conversation_get" }, { name: "messages_send" }, { name: "channels_list" }',
+    '  ] } })',
+    '  if (message.method === "tools/call") {',
+    '    const result = payloadFor(message.params.name, message.params.arguments || {})',
+    '    return write({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: JSON.stringify(result) }] } })',
+    '  }',
+    '  write({ jsonrpc: "2.0", id: message.id, error: { message: `unexpected method ${message.method}` } })',
+    '}',
+    'let buffer = ""',
+    'process.stdin.on("data", (chunk) => {',
+    '  buffer += chunk.toString("utf8")',
+    '  while (buffer.includes("\\n")) {',
+    '    const idx = buffer.indexOf("\\n")',
+    '    const raw = buffer.slice(0, idx).trim()',
+    '    buffer = buffer.slice(idx + 1)',
+    '    if (raw) handle(JSON.parse(raw))',
+    '  }',
+    '})'
   ].join('\n'), 'utf8')
-  const route = resolveHermesOwnerTarget(hermesHome)
-  assert(route.target === 'telegram:Owner Chat (dm)', 'Hermes owner target should use structured channel directory fields before Feishu fallback')
-  assert(route.source === 'hermes-sessiondb-export', 'Hermes owner target should record SessionDB export source')
-  assert(route.targetSource === 'channel-directory', 'Hermes owner target should record structured channel directory source')
+  fs.chmodSync(fakeMcp, 0o755)
+  const mcpProbe = await probeHermesMcp({ command: fakeMcp, hermesHome, timeoutMs: 5000 })
+  assert(mcpProbe.ok === true, 'Hermes MCP probe should accept the public Hermes MCP tool surface')
+  const route = await resolveHermesOwnerTargetViaMcp({ command: fakeMcp, hermesHome, timeoutMs: 5000 })
+  assert(route.target === 'telegram:-1001', 'Hermes owner target should resolve through public MCP conversation details')
+  assert(route.source === 'hermes-mcp-conversation', 'Hermes owner target should record public MCP source')
+  const delivery = await sendHermesOwnerMessageViaMcp({ command: fakeMcp, hermesHome, target: route.target, message: 'Owner report', timeoutMs: 5000 })
+  assert(delivery.delivered === true, 'Hermes owner report should send through public MCP messages_send')
 } finally {
   fs.rmSync(hermesHome, { recursive: true, force: true })
 }

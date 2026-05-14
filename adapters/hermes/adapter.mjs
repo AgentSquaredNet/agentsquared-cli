@@ -5,20 +5,16 @@ import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import { createInboundAdapterPipeline } from '../../lib/runtime/adapter_pipeline.mjs'
 import { checkHermesApiServerHealth, extractHermesResponseText, postHermesResponse } from './api_client.mjs'
 import { buildHermesProcessEnv } from './common.mjs'
-import { hermesProjectRoot, hermesPythonPath } from './common.mjs'
 import { detectHermesHostEnvironment } from './detect.mjs'
 import { readHermesEnv } from './env.mjs'
 import { ensureHermesApiServerEnv } from './env.mjs'
+import { probeHermesMcp, resolveHermesOwnerTargetViaMcp, sendHermesOwnerMessageViaMcp } from './mcp_client.mjs'
 import {
   buildHermesCombinedPrompt,
-  buildHermesSafetyPrompt,
-  buildHermesTaskPrompt,
   hermesConversationName,
   HERMES_STRUCTURED_NO_TOOLS_INSTRUCTIONS,
   ownerReportText,
-  parseHermesCombinedResult,
-  parseHermesSafetyResult,
-  parseHermesTaskResult
+  parseHermesCombinedResult
 } from './helpers.mjs'
 import {
   createPeerBudget
@@ -111,166 +107,6 @@ function runHermesGatewayService(command, {
   })
 }
 
-const HERMES_OWNER_TARGET_ENV = [
-  ['feishu', 'FEISHU_HOME_CHANNEL'],
-  ['wecom', 'WECOM_HOME_CHANNEL'],
-  ['weixin', 'WEIXIN_HOME_CHANNEL'],
-  ['telegram', 'TELEGRAM_HOME_CHANNEL'],
-  ['discord', 'DISCORD_HOME_CHANNEL'],
-  ['slack', 'SLACK_HOME_CHANNEL'],
-  ['signal', 'SIGNAL_HOME_CHANNEL'],
-  ['whatsapp', 'WHATSAPP_HOME_CHANNEL'],
-  ['email', 'EMAIL_HOME_ADDRESS'],
-  ['sms', 'SMS_HOME_CHANNEL'],
-  ['matrix', 'MATRIX_HOME_CHANNEL'],
-  ['mattermost', 'MATTERMOST_HOME_CHANNEL'],
-  ['dingtalk', 'DINGTALK_HOME_CHANNEL'],
-  ['qqbot', 'QQBOT_HOME_CHANNEL'],
-  ['bluebubbles', 'BLUEBUBBLES_HOME_CHANNEL']
-]
-
-const HERMES_INTERNAL_SESSION_SOURCES = new Set(['cli', 'tool', 'local', 'api', 'api_server', 'webhook'])
-
-function parseLastJsonLine(stdout = '') {
-  const lines = `${stdout ?? ''}`.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
-  const line = [...lines].reverse().find((item) => item.startsWith('{') || item.startsWith('['))
-  if (!line) {
-    return null
-  }
-  try {
-    return JSON.parse(line)
-  } catch {
-    return null
-  }
-}
-
-function runHermesPythonJson(hermesHome = '', script = '', {
-  command = 'hermes',
-  timeoutMs = 10000
-} = {}) {
-  const pythonPath = hermesPythonPath(hermesHome, command)
-  const projectRoot = hermesProjectRoot(hermesHome, command)
-  const env = {
-    ...buildHermesProcessEnv({ hermesHome }),
-    ...readHermesEnv(hermesHome)
-  }
-  const result = spawnSync(pythonPath, ['-c', script], {
-    cwd: projectRoot,
-    env,
-    encoding: 'utf8',
-    timeout: Math.max(500, timeoutMs)
-  })
-  if (result.status !== 0 || result.error) {
-    return null
-  }
-  return parseLastJsonLine(result.stdout)
-}
-
-function listRecentHermesExportedSessions(hermesHome = '', {
-  command = 'hermes',
-  limit = 100
-} = {}) {
-  const safeLimit = Math.max(1, Math.min(200, Number.parseInt(`${limit}`, 10) || 100))
-  const internalSourcesJson = JSON.stringify([...HERMES_INTERNAL_SESSION_SOURCES, 'tool'])
-  const script = [
-    'import json',
-    'from hermes_state import SessionDB',
-    'db = SessionDB()',
-    'internal_sources = set(json.loads(' + JSON.stringify(internalSourcesJson) + '))',
-    'sessions = db.list_sessions_rich(exclude_sources=["tool"], limit=' + safeLimit + ')',
-    'out = []',
-    'for session in sessions:',
-    '    raw_id = str(session.get("id", "")).strip()',
-    '    if not raw_id:',
-    '        continue',
-    '    source = str(session.get("source", "")).strip().lower()',
-    '    if not source or source in internal_sources:',
-    '        continue',
-    '    out.append({"id": raw_id, "source": source})',
-    'print(json.dumps(out, ensure_ascii=False))'
-  ].join('\n')
-  const payload = runHermesPythonJson(hermesHome, script, { command, timeoutMs: 10000 })
-  return Array.isArray(payload) ? payload : []
-}
-
-function loadHermesChannelDirectory(hermesHome = '', {
-  command = 'hermes'
-} = {}) {
-  const script = [
-    'import json',
-    'from gateway.channel_directory import load_directory',
-    'print(json.dumps(load_directory(), ensure_ascii=False))'
-  ].join('\n')
-  const payload = runHermesPythonJson(hermesHome, script, { command, timeoutMs: 10000 })
-  return payload && typeof payload === 'object' && !Array.isArray(payload)
-    ? payload
-    : { updated_at: null, platforms: {} }
-}
-
-function hermesChannelTargetName(platform = '', entry = {}) {
-  const name = clean(entry?.name || entry?.id)
-  if (!name) {
-    return ''
-  }
-  if (platform === 'discord' && clean(entry?.guild)) {
-    return `#${name}`
-  }
-  if (platform !== 'discord' && clean(entry?.type)) {
-    return `${name} (${clean(entry.type)})`
-  }
-  return name
-}
-
-function resolveHermesSendMessageTargetForSource(hermesHome = '', source = '', {
-  command = 'hermes'
-} = {}) {
-  const normalizedSource = clean(source).toLowerCase()
-  if (!normalizedSource) {
-    return ''
-  }
-  const directory = loadHermesChannelDirectory(hermesHome, { command })
-  const entries = Array.isArray(directory?.platforms?.[normalizedSource])
-    ? directory.platforms[normalizedSource]
-    : []
-  const first = entries.find((entry) => clean(entry?.id || entry?.name))
-  const targetName = hermesChannelTargetName(normalizedSource, first)
-  return targetName ? `${normalizedSource}:${targetName}` : ''
-}
-
-export function resolveHermesOwnerTarget(hermesHome = '', {
-  command = 'hermes'
-} = {}) {
-  for (const session of listRecentHermesExportedSessions(hermesHome, { command })) {
-    const source = clean(session?.source).toLowerCase()
-    if (source && !HERMES_INTERNAL_SESSION_SOURCES.has(source)) {
-      const exactTarget = resolveHermesSendMessageTargetForSource(hermesHome, source, { command })
-      return {
-        target: exactTarget || source,
-        source: 'hermes-sessiondb-export',
-        sessionId: clean(session?.id),
-        sessionSource: source,
-        targetSource: exactTarget ? 'channel-directory' : 'platform-home'
-      }
-    }
-  }
-
-  const envVars = readHermesEnv(hermesHome)
-  for (const [platform, envKey] of HERMES_OWNER_TARGET_ENV) {
-    const configuredTarget = clean(envVars[envKey])
-    if (configuredTarget) {
-      return {
-        target: `${platform}:${configuredTarget}`,
-        source: `${platform}-home-channel`
-      }
-    }
-  }
-
-  return {
-    target: '',
-    source: 'none'
-  }
-}
-
 function resolveProvidedHermesOwnerTarget({
   ownerReport = null,
   item = null
@@ -298,89 +134,6 @@ function resolveProvidedHermesOwnerTarget({
       || item?.ownerRouteSessionId
       || item?.ownerTargetSessionId
     )
-  }
-}
-
-function sendHermesOwnerMessage({
-  hermesHome = '',
-  command = 'hermes',
-  target = '',
-  message = '',
-  timeoutMs = Number.parseInt(process.env.A2_HERMES_OWNER_REPORT_TIMEOUT_MS ?? '30000', 10) || 30000
-} = {}) {
-  const resolvedTarget = clean(target)
-  const resolvedMessage = clean(message)
-  if (!resolvedTarget || !resolvedMessage) {
-    return {
-      delivered: false,
-      attempted: false,
-      reason: !resolvedTarget ? 'owner-route-not-found' : 'empty-owner-report'
-    }
-  }
-
-  const pythonPath = hermesPythonPath(hermesHome, command)
-  const projectRoot = hermesProjectRoot(hermesHome, command)
-  const env = {
-    ...buildHermesProcessEnv({ hermesHome }),
-    ...readHermesEnv(hermesHome)
-  }
-  const script = [
-    'import json, sys',
-    'from tools.send_message_tool import send_message_tool',
-    'payload = json.loads(sys.stdin.read())',
-    'print(send_message_tool(payload))'
-  ].join('\n')
-  const result = spawnSync(pythonPath, ['-c', script], {
-    cwd: projectRoot,
-    env,
-    input: JSON.stringify({
-      action: 'send',
-      target: resolvedTarget,
-      message: resolvedMessage
-    }),
-    encoding: 'utf8',
-    timeout: Math.max(500, timeoutMs),
-    killSignal: 'SIGTERM'
-  })
-  if (result.error?.code === 'ETIMEDOUT' || result.signal) {
-    return {
-      delivered: false,
-      attempted: true,
-      reason: `owner-report-timeout-after-${Math.max(500, timeoutMs)}ms`,
-      stdout: clean(result.stdout),
-      stderr: clean(result.stderr)
-    }
-  }
-  if (result.status !== 0) {
-    return {
-      delivered: false,
-      attempted: true,
-      reason: clean(result.stderr || result.stdout) || `send-message-exit-${result.status}`
-    }
-  }
-  try {
-    const payload = JSON.parse(clean(result.stdout) || '{}')
-    if (payload?.success) {
-      return {
-        delivered: true,
-        attempted: true,
-        payload
-      }
-    }
-    return {
-      delivered: false,
-      attempted: true,
-      reason: clean(payload?.error) || 'send-message-failed',
-      payload
-    }
-  } catch (error) {
-    return {
-      delivered: false,
-      attempted: true,
-      reason: `send-message-invalid-json:${clean(error?.message)}`,
-      stdout: clean(result.stdout),
-      stderr: clean(result.stderr)
-    }
   }
 }
 
@@ -441,12 +194,18 @@ export function createHermesAdapter({
     }
     const envResult = ensureHermesApiServerEnv(detection.hermesHome)
     let latest = await detectCurrent()
-    if (latest.apiServerHealthy) {
+    const mcpProbe = await probeHermesMcp({
+      command: latest.hermesCommand || command,
+      hermesHome: latest.hermesHome,
+      timeoutMs: 10000
+    })
+    if (latest.apiServerHealthy && mcpProbe.ok && !envResult.changed) {
       return {
         ok: true,
         mode: 'hermes',
         detection: latest,
-        envConfigured: envResult.changed
+        envConfigured: envResult.changed,
+        mcp: mcpProbe
       }
     }
     if (latest.gatewayServiceInstalled) {
@@ -477,12 +236,27 @@ export function createHermesAdapter({
       })
       if (health.ok) {
         latest = await detectCurrent()
+        const restartedMcpProbe = await probeHermesMcp({
+          command: latest.hermesCommand || command,
+          hermesHome: latest.hermesHome,
+          timeoutMs: 10000
+        })
+        if (!restartedMcpProbe.ok) {
+          return {
+            ok: false,
+            mode: 'hermes',
+            error: `Hermes API server is healthy, but Hermes MCP server is not available: ${restartedMcpProbe.reason}`,
+            detection: latest,
+            mcp: restartedMcpProbe
+          }
+        }
         return {
           ok: true,
           mode: 'hermes',
           detection: latest,
           envConfigured: envResult.changed,
-          serviceRestarted: true
+          serviceRestarted: true,
+          mcp: restartedMcpProbe
         }
       }
       return {
@@ -494,7 +268,11 @@ export function createHermesAdapter({
     return {
       ok: false,
       mode: 'hermes',
-      error: 'Hermes API server is not healthy and no managed Hermes gateway service is installed. AgentSquared has written the required Hermes .env values. Start Hermes gateway manually, then retry.'
+      error: latest.apiServerHealthy
+        ? `Hermes API server is healthy, but Hermes MCP server is not available: ${mcpProbe.reason}`
+        : 'Hermes API server is not healthy and no managed Hermes gateway service is installed. AgentSquared has written the required Hermes .env values. Start Hermes gateway manually, then retry.',
+      detection: latest,
+      mcp: mcpProbe
     }
   }
 
@@ -506,9 +284,7 @@ export function createHermesAdapter({
       const payload = await postHermesResponse({
         apiBase: detection.apiBase,
         envVars,
-        hermesHome: detection.hermesHome,
         timeoutMs: summaryTimeoutMs,
-        noTools: true,
         store: false,
         conversation: hermesConversationName('agentsquared:summary', localAgentId, context.remoteAgentId, context.conversationKey),
         instructions: [
@@ -564,10 +340,8 @@ export function createHermesAdapter({
       const taskPayload = await postHermesResponse({
         apiBase: detection.apiBase,
         envVars,
-        hermesHome: detection.hermesHome,
         timeoutMs,
         instructions: HERMES_STRUCTURED_NO_TOOLS_INSTRUCTIONS,
-        noTools: true,
         conversation: hermesConversation,
         input: buildHermesCombinedPrompt({
           localAgentId,
@@ -615,8 +389,10 @@ export function createHermesAdapter({
       const providedTarget = resolveProvidedHermesOwnerTarget({ ownerReport, item })
       const target = providedTarget.target
         ? providedTarget
-        : resolveHermesOwnerTarget(detection.hermesHome, {
-            command: hermesCommand
+        : await resolveHermesOwnerTargetViaMcp({
+            command: hermesCommand,
+            hermesHome: detection.hermesHome,
+            timeoutMs: Number.parseInt(process.env.A2_HERMES_OWNER_REPORT_TIMEOUT_MS ?? '30000', 10) || 30000
           })
       if (!target.target) {
         return {
@@ -626,11 +402,12 @@ export function createHermesAdapter({
           reason: 'owner-route-not-found'
         }
       }
-      const delivery = sendHermesOwnerMessage({
+      const delivery = await sendHermesOwnerMessageViaMcp({
         hermesHome: detection.hermesHome,
         command: hermesCommand,
         target: target.target,
-        message: summary
+        message: summary,
+        timeoutMs: Number.parseInt(process.env.A2_HERMES_OWNER_REPORT_TIMEOUT_MS ?? '30000', 10) || 30000
       })
       return {
         ...delivery,

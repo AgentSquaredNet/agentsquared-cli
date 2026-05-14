@@ -57,6 +57,7 @@ export async function detectHermesHostEnvironment({
       apiServerHealthy: true,
       apiServerHealth: apiCheck.health?.payload ?? null,
       apiServerModels: apiCheck.models?.payload ?? null,
+      apiServerCapabilities: apiCheck.capabilities?.payload ?? null,
       gatewayServiceInstalled: serviceMode.installed,
       gatewayService: serviceMode,
       gatewayPid
