@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 
 import { hermesProjectRoot } from './adapters/hermes/common.mjs'
 import { ensureHermesApiServerNoMcpConfig } from './adapters/hermes/env.mjs'
@@ -17,6 +18,18 @@ function assert(condition, message) {
     throw new Error(message)
   }
 }
+
+function assertCliSmoke(argv, expected, message) {
+  const result = spawnSync(process.execPath, ['./bin/a2-cli.js', ...argv], {
+    cwd: process.cwd(),
+    encoding: 'utf8'
+  })
+  assert(result.status === 0, `${message}: ${result.stderr || result.stdout}`)
+  assert(`${result.stdout}`.includes(expected), `${message}: expected ${expected}`)
+}
+
+assertCliSmoke(['--help'], 'AgentSquared CLI', 'a2-cli --help should load the public CLI entrypoint')
+assertCliSmoke(['--version'], '1.6.1', 'a2-cli --version should print package version')
 
 assert(normalizeAgentSquaredAgentId('A2:Helper@ExampleOwner') === 'helper@exampleowner', 'A2-prefixed AgentSquared ID should provide a lowercase comparison key')
 assert(normalizeAgentSquaredAgentId('helper@ExampleOwner') === 'helper@exampleowner', 'bare AgentSquared ID should provide a lowercase comparison key')

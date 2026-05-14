@@ -16,7 +16,8 @@ import { getFriendDirectory } from './lib/transport/relay_http.mjs'
 import { generateRuntimeKeyBundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
 import { runGateway } from './lib/gateway/server.mjs'
 import { SUPPORTED_HOST_RUNTIMES, createHostRuntimeAdapter, detectHostRuntimeEnvironment } from './adapters/index.mjs'
-import { resolveHermesOwnerTarget } from './adapters/hermes/adapter.mjs'
+import { buildHermesProcessEnv } from './adapters/hermes/common.mjs'
+import { resolveHermesOwnerTargetViaMcp } from './adapters/hermes/mcp_client.mjs'
 import { resolveOpenClawAgentSelection } from './adapters/openclaw/detect.mjs'
 import {
   defaultGatewayLogFile,
@@ -52,8 +53,40 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const ROOT = __dirname
 
+function packageVersion() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
+    return clean(pkg.version)
+  } catch {
+    return ''
+  }
+}
+
 function clean(value) {
   return `${value ?? ''}`.trim()
+}
+
+function childProcessEnvForArgs(args = {}, detectedHostRuntime = null) {
+  const runtime = clean(args['host-runtime'] || detectedHostRuntime?.resolved).toLowerCase()
+  if (
+    runtime === 'hermes'
+    || clean(args['hermes-home'])
+    || clean(args['hermes-profile'])
+  ) {
+    return buildHermesProcessEnv({ hermesHome: clean(args['hermes-home']) })
+  }
+  return process.env
+}
+
+function applyProcessEnvForArgs(args = {}, detectedHostRuntime = null) {
+  const runtime = clean(args['host-runtime'] || detectedHostRuntime?.resolved).toLowerCase()
+  if (
+    runtime === 'hermes'
+    || clean(args['hermes-home'])
+    || clean(args['hermes-profile'])
+  ) {
+    Object.assign(process.env, buildHermesProcessEnv({ hermesHome: clean(args['hermes-home']) }))
+  }
 }
 
 function redactForOutput(value, seen = new WeakSet()) {
@@ -525,6 +558,7 @@ function spawnFriendMessageWorker(args = {}) {
   const worker = spawn(process.execPath, [path.join(ROOT, 'a2_cli.mjs'), ...buildFriendMessageWorkerArgv(args)], {
     cwd: ROOT,
     detached: true,
+    env: childProcessEnvForArgs(args),
     stdio: 'ignore'
   })
   worker.unref()
@@ -642,8 +676,9 @@ async function resolveCliOwnerRouteSnapshot({
     if (hostContext.resolvedHostRuntime !== 'hermes') {
       return null
     }
-    const route = resolveHermesOwnerTarget(hostContext.hermesHome, {
-      command: hostContext.hermesCommand
+    const route = await resolveHermesOwnerTargetViaMcp({
+      command: hostContext.hermesCommand,
+      hermesHome: hostContext.hermesHome
     })
     if (!clean(route?.target)) {
       return null
@@ -1205,6 +1240,7 @@ async function commandOnboard(args) {
       const child = spawn(process.execPath, [path.join(ROOT, 'a2_cli.mjs'), 'gateway', ...gatewayArgs], {
         detached: true,
         cwd: ROOT,
+        env: childProcessEnvForArgs(args, detectedHostRuntime),
         stdio: ['ignore', stdoutFd, stderrFd]
       })
       fs.closeSync(stdoutFd)
@@ -1389,6 +1425,7 @@ async function commandGatewayRestart(args, rawArgs, {
   const child = spawn(process.execPath, [path.join(ROOT, 'a2_cli.mjs'), 'gateway', ...gatewayArgs], {
     detached: true,
     cwd: ROOT,
+    env: childProcessEnvForArgs(args),
     stdio: ['ignore', stdoutFd, stderrFd]
   })
   fs.closeSync(stdoutFd)
@@ -1552,6 +1589,7 @@ async function commandGatewayDoctor(args) {
     openclaw: hostOptions.openclaw,
     hermes: hostOptions.hermes
   })
+  applyProcessEnvForArgs(args, detectedHostRuntime)
   printJson(await runGatewayDoctor({
     args,
     detectedHostRuntime
@@ -1589,6 +1627,7 @@ async function commandUpdate(args, rawArgs) {
     openclaw: hostOptions.openclaw,
     hermes: hostOptions.hermes
   })
+  applyProcessEnvForArgs(args, detectedHostRuntime)
   const doctor = await runGatewayDoctor({
     args,
     detectedHostRuntime
@@ -1617,6 +1656,7 @@ async function commandUpdate(args, rawArgs) {
 }
 
 async function commandFriendList(args) {
+  applyProcessEnvForArgs(args)
   const ctx = await signedRelayContext(args)
   const directory = await getFriendDirectory(ctx.apiBase, ctx.agentId, ctx.bundle, ctx.transport)
   printJson({
@@ -2253,6 +2293,11 @@ function helpText() {
 }
 
 export async function runA2Cli(argv) {
+  if (argv.includes('--version') || argv.includes('-v')) {
+    console.log(packageVersion() || 'unknown')
+    return
+  }
+
   if (argv.includes('--help') || argv.includes('-h') || argv.length === 0) {
     console.log(helpText())
     return

@@ -72,6 +72,35 @@ export function hermesConfigPath(hermesHome = '') {
   return path.join(resolveUserPath(hermesHome || defaultHermesRoot()), 'config.yaml')
 }
 
+function parseHermesEnvFile(hermesHome = '') {
+  const filePath = hermesEnvPath(hermesHome)
+  try {
+    const text = fs.readFileSync(filePath, 'utf8')
+    const env = {}
+    for (const line of text.split(/\r?\n/)) {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith('#')) {
+        continue
+      }
+      const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
+      if (!match) {
+        continue
+      }
+      let value = match[2].trim()
+      if (
+        (value.startsWith('"') && value.endsWith('"'))
+        || (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1)
+      }
+      env[match[1]] = value
+    }
+    return env
+  } catch {
+    return {}
+  }
+}
+
 function existingPath(filePath = '') {
   const normalized = clean(filePath)
   if (!normalized) {
@@ -313,11 +342,13 @@ export function buildHermesProcessEnv({
   hermesHome = '',
   extra = {}
 } = {}) {
+  const resolvedHome = clean(hermesHome)
+  const hermesEnv = parseHermesEnvFile(resolvedHome)
   const env = {
+    ...hermesEnv,
     ...process.env,
     ...extra
   }
-  const resolvedHome = clean(hermesHome)
   if (resolvedHome) {
     env.HERMES_HOME = resolveUserPath(resolvedHome)
   }
