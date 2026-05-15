@@ -432,6 +432,7 @@ class OpenClawGatewayWsSession {
     this.connectChallengeError = null
     this.connectChallengeResolve = null
     this.connectChallengeReject = null
+    this.eventListeners = new Set()
   }
 
   async connect() {
@@ -618,6 +619,16 @@ class OpenClawGatewayWsSession {
       }
       return
     }
+    if (parsed?.type === 'event') {
+      for (const listener of this.eventListeners) {
+        try {
+          listener(parsed)
+        } catch {
+          // Event listeners are best-effort observers and must not break RPC.
+        }
+      }
+      return
+    }
     if (parsed?.type === 'res' && clean(parsed.id)) {
       const pending = this.pending.get(clean(parsed.id))
       if (!pending) {
@@ -656,6 +667,16 @@ class OpenClawGatewayWsSession {
   async request(method, params = {}, timeoutMs = this.requestTimeoutMs) {
     await this.connect()
     return this.#sendRequest(randomId(), clean(method), params, timeoutMs)
+  }
+
+  onEvent(listener) {
+    if (typeof listener !== 'function') {
+      return () => {}
+    }
+    this.eventListeners.add(listener)
+    return () => {
+      this.eventListeners.delete(listener)
+    }
   }
 
   async close() {

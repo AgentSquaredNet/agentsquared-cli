@@ -30,7 +30,7 @@ function assertCliSmoke(argv, expected, message) {
 }
 
 assertCliSmoke(['--help'], 'AgentSquared CLI', 'a2-cli --help should load the public CLI entrypoint')
-assertCliSmoke(['--version'], '1.6.2', 'a2-cli --version should print package version')
+assertCliSmoke(['--version'], '1.6.3', 'a2-cli --version should print package version')
 assert(typeof resolveHermesOwnerTarget === 'function', 'Hermes adapter should export owner-route resolver used by CLI')
 
 assert(normalizeAgentSquaredAgentId('A2:Helper@ExampleOwner') === 'helper@exampleowner', 'A2-prefixed AgentSquared ID should provide a lowercase comparison key')

@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { buildConversationSummaryPrompt, normalizeConversationSummary } from '../../lib/conversation/templates.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import { createInboundAdapterPipeline } from '../../lib/runtime/adapter_pipeline.mjs'
-import { checkHermesApiServerHealth, extractHermesResponseText, postHermesResponse } from './api_client.mjs'
+import { checkHermesApiServerHealth, extractHermesResponseText, postHermesResponse, postHermesResponseStream } from './api_client.mjs'
 import { buildHermesProcessEnv } from './common.mjs'
 import { detectHermesHostEnvironment } from './detect.mjs'
 import { readHermesEnv } from './env.mjs'
@@ -22,6 +22,52 @@ import {
 
 function clean(value) {
   return `${value ?? ''}`.trim()
+}
+
+function h2aInboundText(item = null) {
+  return clean(item?.request?.params?.message?.parts?.[0]?.text || item?.request?.params?.message?.text || '')
+}
+
+function buildH2AStreamInstructions({
+  localAgentId = '',
+  selectedSkill = ''
+} = {}) {
+  return [
+    'You are the local agent replying to a human through AgentSquared H2A.',
+    'Do not call tools.',
+    'Reply directly to the human in natural language.',
+    'Do not wrap the answer in JSON, Markdown metadata, or AgentSquared control fields.',
+    `Local AgentSquared agent: ${clean(localAgentId) || 'unknown'}.`,
+    `Selected skill: ${clean(selectedSkill) || 'human-agent-chat'}.`
+  ].join('\n')
+}
+
+function buildH2AStreamPrompt({
+  item = null,
+  conversationTranscript = ''
+} = {}) {
+  const text = h2aInboundText(item)
+  const transcript = clean(conversationTranscript)
+  return [
+    transcript ? `Conversation so far:\n${transcript}` : '',
+    `Human message:\n${text}`
+  ].filter(Boolean).join('\n\n')
+}
+
+async function emitTextDelta(emitStreamEvent, {
+  delta = '',
+  source = ''
+} = {}) {
+  const text = `${delta ?? ''}`
+  if (!text || typeof emitStreamEvent !== 'function') {
+    return
+  }
+  await emitStreamEvent({
+    type: 'text_delta',
+    delta: text,
+    source,
+    createdAt: new Date().toISOString()
+  })
 }
 
 function nowMs() {
@@ -379,6 +425,67 @@ export function createHermesAdapter({
         runtimeMetadata: {
           hermesConversation,
           hermesApiBase: detection.apiBase
+        }
+      }
+    },
+    runH2AStream: async ({
+      runtimeContext,
+      item,
+      selectedSkill,
+      conversationKey,
+      conversationControl,
+      conversationTranscript,
+      defaultDecision,
+      defaultStopReason,
+      inboundId,
+      emitStreamEvent
+    }) => {
+      const { detection, envVars } = runtimeContext
+      const hermesConversation = hermesConversationName('agentsquared:h2a-stream', localAgentId, 'human', conversationKey, `${conversationControl.turnIndex}`)
+      let streamedText = ''
+      const payload = await postHermesResponseStream({
+        apiBase: detection.apiBase,
+        envVars,
+        timeoutMs,
+        instructions: buildH2AStreamInstructions({ localAgentId, selectedSkill }),
+        conversation: hermesConversation,
+        input: buildH2AStreamPrompt({ item, conversationTranscript }),
+        onTextDelta: (delta) => {
+          streamedText += `${delta ?? ''}`
+          return emitTextDelta(emitStreamEvent, { delta, source: 'hermes' })
+        }
+      })
+      const replyText = scrubOutboundText(extractHermesResponseText(payload))
+      if (!streamedText && replyText) {
+        await emitTextDelta(emitStreamEvent, { delta: replyText, source: 'hermes' })
+      } else if (streamedText && replyText.startsWith(streamedText) && replyText.length > streamedText.length) {
+        await emitTextDelta(emitStreamEvent, { delta: replyText.slice(streamedText.length), source: 'hermes' })
+      }
+      return {
+        parsed: {
+          action: 'allow',
+          selectedSkill,
+          peerResponse: {
+            message: {
+              kind: 'message',
+              role: 'agent',
+              parts: [{ kind: 'text', text: replyText }]
+            },
+            metadata: {
+              turnIndex: conversationControl.turnIndex,
+              decision: defaultDecision,
+              stopReason: defaultStopReason,
+              final: defaultDecision === 'done',
+              finalize: defaultDecision === 'done'
+            }
+          },
+          ownerSummary: replyText
+        },
+        runtimeMetadata: {
+          hermesConversation,
+          hermesApiBase: detection.apiBase,
+          stream: true,
+          inboundId
         }
       }
     }

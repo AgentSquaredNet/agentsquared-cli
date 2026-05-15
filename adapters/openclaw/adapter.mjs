@@ -46,6 +46,62 @@ async function sleep(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function h2aInboundText(item = null) {
+  return clean(item?.request?.params?.message?.parts?.[0]?.text || item?.request?.params?.message?.text || '')
+}
+
+function buildOpenClawH2AStreamPrompt({
+  localAgentId = '',
+  selectedSkill = '',
+  item = null,
+  conversationTranscript = ''
+} = {}) {
+  return [
+    'You are replying to a human through AgentSquared H2A.',
+    'Reply directly in natural language.',
+    'Do not wrap the answer in JSON or AgentSquared metadata.',
+    `Local AgentSquared agent: ${clean(localAgentId) || 'unknown'}.`,
+    `Selected skill: ${clean(selectedSkill) || 'human-agent-chat'}.`,
+    clean(conversationTranscript) ? `Conversation so far:\n${clean(conversationTranscript)}` : '',
+    `Human message:\n${h2aInboundText(item)}`
+  ].filter(Boolean).join('\n\n')
+}
+
+function openClawEventRunId(event = null) {
+  return clean(
+    event?.payload?.runId
+    || event?.payload?.run?.id
+    || event?.payload?.run?.runId
+    || event?.payload?.metadata?.runId
+    || event?.runId
+  )
+}
+
+function openClawEventTextDelta(event = null) {
+  return `${event?.payload?.delta
+    ?? event?.payload?.textDelta
+    ?? event?.payload?.contentDelta
+    ?? event?.payload?.message?.delta
+    ?? event?.payload?.message?.textDelta
+    ?? ''}`
+}
+
+async function emitTextDelta(emitStreamEvent, {
+  delta = '',
+  source = ''
+} = {}) {
+  const text = `${delta ?? ''}`
+  if (!text || typeof emitStreamEvent !== 'function') {
+    return
+  }
+  await emitStreamEvent({
+    type: 'text_delta',
+    delta: text,
+    source,
+    createdAt: new Date().toISOString()
+  })
+}
+
 function describeOpenClawError(error = null, seen = new Set()) {
   if (error == null) {
     return ''
@@ -392,6 +448,147 @@ export function createOpenClawAdapter({
           openclawSessionKey: sessionKey,
           openclawGatewayUrl: gatewayContext.gatewayUrl
         }
+      }
+    },
+    runH2AStream: async ({
+      runtimeContext,
+      item,
+      selectedSkill,
+      conversationKey,
+      conversationControl,
+      conversationTranscript,
+      defaultDecision,
+      defaultStopReason,
+      inboundId,
+      emitStreamEvent
+    }) => {
+      const { client, gatewayContext } = runtimeContext
+      const sessionKey = stableId(
+        'agentsquared-h2a-stream',
+        localAgentId,
+        conversationKey,
+        item?.request?.params?.metadata?.turnIndex || '1',
+        item?.inboundId
+      )
+      const prompt = buildOpenClawH2AStreamPrompt({
+        localAgentId,
+        selectedSkill,
+        item,
+        conversationTranscript
+      })
+      const accepted = await requestOpenClaw(client, 'agent', {
+        agentId: agentName,
+        sessionKey,
+        message: prompt,
+        extraSystemPrompt: OPENCLAW_AGENT_SQUARED_NO_TOOLS_PROMPT,
+        idempotencyKey: `agentsquared-h2a-${inboundId || randomId('inbound')}`
+      }, timeoutMs, 'H2A stream agent request', { openclawAgent: agentName, localAgentId })
+      const runId = readOpenClawRunId(accepted)
+      if (!runId) {
+        throw new Error('OpenClaw H2A stream agent call did not return a runId.')
+      }
+
+      let done = false
+      let lastPolledText = ''
+      let nativeEventUsed = false
+      const unsubscribe = client.onEvent?.((event) => {
+        const eventRunId = openClawEventRunId(event)
+        if (eventRunId && eventRunId !== runId) {
+          return
+        }
+        const delta = openClawEventTextDelta(event)
+        if (!delta) {
+          return
+        }
+        nativeEventUsed = true
+        void emitTextDelta(emitStreamEvent, { delta, source: 'openclaw' })
+      }) ?? (() => {})
+
+      const pollPromise = (async () => {
+        while (!done) {
+          await sleep(400)
+          if (done || nativeEventUsed) {
+            continue
+          }
+          try {
+            const history = await requestOpenClaw(client, 'chat.history', {
+              sessionKey,
+              limit: 6
+            }, Math.min(timeoutMs, 10000), 'H2A stream chat history poll')
+            const text = latestAssistantText(history, { runId })
+            if (text && text.startsWith(lastPolledText) && text.length > lastPolledText.length) {
+              const delta = text.slice(lastPolledText.length)
+              lastPolledText = text
+              await emitTextDelta(emitStreamEvent, { delta, source: 'openclaw' })
+            } else if (text && !lastPolledText) {
+              lastPolledText = text
+              await emitTextDelta(emitStreamEvent, { delta: text, source: 'openclaw' })
+            }
+          } catch {
+            // Polling is a fallback path; the final wait/history read remains authoritative.
+          }
+        }
+      })()
+
+      try {
+        const waited = await requestOpenClaw(client, 'agent.wait', {
+          runId,
+          timeoutMs
+        }, timeoutMs + 1000, 'H2A stream agent wait')
+        const status = readOpenClawStatus(waited).toLowerCase()
+        if (status && status !== 'ok' && status !== 'completed' && status !== 'done') {
+          throw new Error(`OpenClaw agent.wait returned ${status || 'an unknown status'} for run ${runId}.`)
+        }
+        done = true
+        await pollPromise
+        const history = await requestOpenClaw(client, 'chat.history', {
+          sessionKey,
+          limit: 12
+        }, timeoutMs, 'H2A stream final chat history')
+        const replyText = scrubOutboundText(resolveFinalAssistantResultText({
+          waited,
+          history,
+          runId,
+          label: 'OpenClaw H2A stream task',
+          sessionKey
+        }))
+        if (!nativeEventUsed && !lastPolledText && replyText) {
+          await emitTextDelta(emitStreamEvent, { delta: replyText, source: 'openclaw' })
+        } else if (!nativeEventUsed && lastPolledText && replyText.startsWith(lastPolledText) && replyText.length > lastPolledText.length) {
+          await emitTextDelta(emitStreamEvent, { delta: replyText.slice(lastPolledText.length), source: 'openclaw' })
+        }
+        return {
+          parsed: {
+            action: 'allow',
+            selectedSkill,
+            peerResponse: {
+              message: {
+                kind: 'message',
+                role: 'agent',
+                parts: [{ kind: 'text', text: replyText }]
+              },
+              metadata: {
+                turnIndex: conversationControl.turnIndex,
+                decision: defaultDecision,
+                stopReason: defaultStopReason,
+                final: defaultDecision === 'done',
+                finalize: defaultDecision === 'done'
+              }
+            },
+            ownerSummary: replyText
+          },
+          runtimeMetadata: {
+            openclawRunId: runId,
+            openclawSessionKey: sessionKey,
+            openclawGatewayUrl: gatewayContext.gatewayUrl,
+            stream: true,
+            inboundId
+          }
+        }
+      } finally {
+        done = true
+        unsubscribe()
+        await pollPromise.catch(() => {})
       }
     }
   })

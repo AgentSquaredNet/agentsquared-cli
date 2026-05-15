@@ -43,6 +43,101 @@ export async function fetchHermesJson(apiBase, pathname, {
   }
 }
 
+function parseSseFrame(frame = '') {
+  const lines = `${frame}`.split(/\r?\n/)
+  let event = ''
+  const dataLines = []
+  for (const line of lines) {
+    if (!line || line.startsWith(':')) {
+      continue
+    }
+    const separator = line.indexOf(':')
+    const field = separator >= 0 ? line.slice(0, separator).trim() : line.trim()
+    const value = separator >= 0 ? line.slice(separator + 1).replace(/^ /, '') : ''
+    if (field === 'event') {
+      event = value
+    } else if (field === 'data') {
+      dataLines.push(value)
+    }
+  }
+  const dataText = dataLines.join('\n')
+  if (!dataText || dataText === '[DONE]') {
+    return { event, data: dataText }
+  }
+  try {
+    return { event, data: JSON.parse(dataText) }
+  } catch {
+    return { event, data: dataText }
+  }
+}
+
+export async function fetchHermesSse(apiBase, pathname, {
+  method = 'POST',
+  apiKey = '',
+  body = null,
+  timeoutMs = 180000,
+  onEvent = null
+} = {}) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), Math.max(250, timeoutMs))
+  try {
+    const headers = { Accept: 'text/event-stream' }
+    if (clean(apiKey)) {
+      headers.Authorization = `Bearer ${clean(apiKey)}`
+    }
+    if (body != null) {
+      headers['Content-Type'] = 'application/json'
+    }
+    const response = await fetch(`${apiBase.replace(/\/$/, '')}${pathname}`, {
+      method,
+      headers,
+      body: body == null ? undefined : JSON.stringify(body),
+      signal: controller.signal
+    })
+    if (!response.ok) {
+      const text = await response.text()
+      let payload = text
+      try {
+        payload = text ? JSON.parse(text) : null
+      } catch {
+        // keep raw text
+      }
+      return { ok: false, status: response.status, payload }
+    }
+    if (!response.body?.getReader) {
+      throw new Error('Hermes API server did not return a readable SSE body.')
+    }
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) {
+        break
+      }
+      buffer += decoder.decode(value, { stream: true })
+      let boundary = buffer.search(/\r?\n\r?\n/)
+      while (boundary >= 0) {
+        const frame = buffer.slice(0, boundary)
+        const match = buffer.slice(boundary).match(/^\r?\n\r?\n/)
+        buffer = buffer.slice(boundary + (match?.[0]?.length || 2))
+        const parsed = parseSseFrame(frame)
+        if (parsed.data !== '') {
+          await onEvent?.(parsed)
+        }
+        boundary = buffer.search(/\r?\n\r?\n/)
+      }
+    }
+    const tail = buffer.trim()
+    if (tail) {
+      await onEvent?.(parseSseFrame(tail))
+    }
+    return { ok: true, status: response.status }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 export function extractHermesResponseText(payload = null) {
   const output = Array.isArray(payload?.output) ? payload.output : []
   const message = output.findLast?.((item) => item?.type === 'message')
@@ -169,4 +264,67 @@ export async function postHermesResponse({
     throw error
   }
   return response.payload
+}
+
+export async function postHermesResponseStream({
+  apiBase = '',
+  envVars = {},
+  input = '',
+  instructions = '',
+  conversation = '',
+  timeoutMs = 180000,
+  store = false,
+  onTextDelta = null
+} = {}) {
+  const resolvedBase = buildHermesApiBase({ apiBase, envVars })
+  let completedPayload = null
+  let failedPayload = null
+  let accumulatedText = ''
+  const response = await fetchHermesSse(resolvedBase, '/v1/responses', {
+    method: 'POST',
+    apiKey: clean(envVars.API_SERVER_KEY),
+    timeoutMs,
+    body: {
+      input,
+      instructions,
+      conversation: clean(conversation) || undefined,
+      store: Boolean(store),
+      stream: true
+    },
+    onEvent: async ({ event, data }) => {
+      const type = clean(data?.type || event)
+      if (type === 'response.output_text.delta') {
+        const delta = `${data?.delta ?? ''}`
+        if (delta) {
+          accumulatedText += delta
+          await onTextDelta?.(delta)
+        }
+        return
+      }
+      if (type === 'response.completed') {
+        completedPayload = data?.response ?? data
+        return
+      }
+      if (type === 'response.failed') {
+        failedPayload = data?.response ?? data
+      }
+    }
+  })
+  if (!response.ok) {
+    const detail = clean(response?.payload?.error?.message || response?.payload?.message || response?.payload)
+    throw new Error(detail || `Hermes API server stream request failed with status ${response.status}`)
+  }
+  if (failedPayload) {
+    const detail = clean(failedPayload?.error?.message || failedPayload?.message)
+    throw new Error(detail || 'Hermes API server stream failed.')
+  }
+  if (completedPayload) {
+    return completedPayload
+  }
+  return {
+    output: [{
+      type: 'message',
+      content: [{ type: 'output_text', text: accumulatedText }]
+    }]
+  }
 }
