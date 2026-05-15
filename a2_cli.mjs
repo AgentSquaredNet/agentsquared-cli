@@ -17,7 +17,7 @@ import { generateRuntimeKeyBundle, writeRuntimeKeyBundle } from './lib/runtime/k
 import { runGateway } from './lib/gateway/server.mjs'
 import { SUPPORTED_HOST_RUNTIMES, createHostRuntimeAdapter, detectHostRuntimeEnvironment } from './adapters/index.mjs'
 import { buildHermesProcessEnv } from './adapters/hermes/common.mjs'
-import { resolveHermesOwnerTargetViaMcp } from './adapters/hermes/mcp_client.mjs'
+import { resolveHermesOwnerTarget } from './adapters/hermes/adapter.mjs'
 import { resolveOpenClawAgentSelection } from './adapters/openclaw/detect.mjs'
 import {
   defaultGatewayLogFile,
@@ -676,7 +676,7 @@ async function resolveCliOwnerRouteSnapshot({
     if (hostContext.resolvedHostRuntime !== 'hermes') {
       return null
     }
-    const route = await resolveHermesOwnerTargetViaMcp({
+    const route = await resolveHermesOwnerTarget({
       command: hostContext.hermesCommand,
       hermesHome: hostContext.hermesHome
     })

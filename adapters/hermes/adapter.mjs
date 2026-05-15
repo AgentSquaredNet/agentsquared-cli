@@ -137,6 +137,20 @@ function resolveProvidedHermesOwnerTarget({
   }
 }
 
+export async function resolveHermesOwnerTarget(hermesHomeOrOptions = '', options = {}) {
+  const opts = typeof hermesHomeOrOptions === 'object' && hermesHomeOrOptions !== null
+    ? hermesHomeOrOptions
+    : {
+        ...options,
+        hermesHome: hermesHomeOrOptions
+      }
+  return resolveHermesOwnerTargetViaMcp({
+    command: clean(opts.command) || 'hermes',
+    hermesHome: clean(opts.hermesHome),
+    timeoutMs: Number.parseInt(`${opts.timeoutMs ?? process.env.A2_HERMES_OWNER_REPORT_TIMEOUT_MS ?? 30000}`, 10) || 30000
+  })
+}
+
 export function createHermesAdapter({
   localAgentId,
   conversationStore = null,
@@ -389,7 +403,7 @@ export function createHermesAdapter({
       const providedTarget = resolveProvidedHermesOwnerTarget({ ownerReport, item })
       const target = providedTarget.target
         ? providedTarget
-        : await resolveHermesOwnerTargetViaMcp({
+        : await resolveHermesOwnerTarget({
             command: hermesCommand,
             hermesHome: detection.hermesHome,
             timeoutMs: Number.parseInt(process.env.A2_HERMES_OWNER_REPORT_TIMEOUT_MS ?? '30000', 10) || 30000
