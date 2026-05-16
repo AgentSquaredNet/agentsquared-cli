@@ -1,5 +1,6 @@
 import { withOpenClawGatewayClient } from './ws_client.mjs'
 import { buildConversationSummaryPrompt, normalizeConversationSummary, parseAgentSquaredOutboundEnvelope } from '../../lib/conversation/templates.mjs'
+import { buildInboundPlatformContext } from '../../lib/conversation/platform_context.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import { createInboundAdapterPipeline } from '../../lib/runtime/adapter_pipeline.mjs'
 import {
@@ -56,12 +57,30 @@ function buildOpenClawH2AStreamPrompt({
   item = null,
   conversationTranscript = ''
 } = {}) {
+  const metadata = item?.request?.params?.metadata ?? {}
+  const remoteHuman = clean(metadata.fromHuman || clean(metadata.from).replace(/^human:/, ''))
+  const localHuman = clean(localAgentId).includes('@') ? clean(localAgentId).split('@').pop() : ''
+  const platformContext = buildInboundPlatformContext({
+    localAgentId,
+    remoteAgentId: clean(item?.remoteAgentId),
+    selectedSkill,
+    item,
+    messageMethod: clean(item?.request?.method),
+    peerSessionId: clean(item?.peerSessionId),
+    requestId: clean(item?.request?.id)
+  })
   return [
     'You are replying to a human through AgentSquared H2A.',
     'Reply directly in natural language.',
     'Do not wrap the answer in JSON or AgentSquared metadata.',
+    'Use the AgentSquared Context below as the authoritative identity and session context.',
+    'The senderHuman is the current human user. The recipientHuman is the local agent owner.',
+    'Never assume the current human user is the local owner unless senderHuman and recipientHuman are identical.',
     `Local AgentSquared agent: ${clean(localAgentId) || 'unknown'}.`,
+    ...(localHuman ? [`Local owner human: @${localHuman}.`] : []),
+    ...(remoteHuman ? [`Current human user: @${remoteHuman}.`] : []),
     `Selected skill: ${clean(selectedSkill) || 'human-agent-chat'}.`,
+    platformContext,
     clean(conversationTranscript) ? `Conversation so far:\n${clean(conversationTranscript)}` : '',
     `Human message:\n${h2aInboundText(item)}`
   ].filter(Boolean).join('\n\n')

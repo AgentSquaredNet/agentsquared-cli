@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process'
 
 import { buildConversationSummaryPrompt, normalizeConversationSummary } from '../../lib/conversation/templates.mjs'
+import { buildInboundPlatformContext } from '../../lib/conversation/platform_context.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import { createInboundAdapterPipeline } from '../../lib/runtime/adapter_pipeline.mjs'
 import { checkHermesApiServerHealth, extractHermesResponseText, postHermesResponse, postHermesResponseStream } from './api_client.mjs'
@@ -30,25 +31,47 @@ function h2aInboundText(item = null) {
 
 function buildH2AStreamInstructions({
   localAgentId = '',
-  selectedSkill = ''
+  selectedSkill = '',
+  item = null
 } = {}) {
+  const metadata = item?.request?.params?.metadata ?? {}
+  const remoteHuman = clean(metadata.fromHuman || clean(metadata.from).replace(/^human:/, ''))
+  const localHuman = clean(localAgentId).includes('@') ? clean(localAgentId).split('@').pop() : ''
   return [
     'You are the local agent replying to a human through AgentSquared H2A.',
     'Do not call tools.',
     'Reply directly to the human in natural language.',
     'Do not wrap the answer in JSON, Markdown metadata, or AgentSquared control fields.',
+    'Use the AgentSquared Context in the user input as the authoritative identity and session context.',
+    'The senderHuman is the current human user. Address or refer to that person only as senderHuman when a name is needed.',
+    'The recipientHuman is the owner of the local agent, not necessarily the person currently chatting.',
+    'Never assume the current human user is the recipientHuman or local owner unless senderHuman and recipientHuman are identical.',
     `Local AgentSquared agent: ${clean(localAgentId) || 'unknown'}.`,
+    ...(localHuman ? [`Local owner human: @${localHuman}.`] : []),
+    ...(remoteHuman ? [`Current human user: @${remoteHuman}.`] : []),
     `Selected skill: ${clean(selectedSkill) || 'human-agent-chat'}.`
   ].join('\n')
 }
 
 function buildH2AStreamPrompt({
+  localAgentId = '',
+  selectedSkill = '',
   item = null,
   conversationTranscript = ''
 } = {}) {
   const text = h2aInboundText(item)
   const transcript = clean(conversationTranscript)
+  const platformContext = buildInboundPlatformContext({
+    localAgentId,
+    remoteAgentId: clean(item?.remoteAgentId),
+    selectedSkill,
+    item,
+    messageMethod: clean(item?.request?.method),
+    peerSessionId: clean(item?.peerSessionId),
+    requestId: clean(item?.request?.id)
+  })
   return [
+    platformContext,
     transcript ? `Conversation so far:\n${transcript}` : '',
     `Human message:\n${text}`
   ].filter(Boolean).join('\n\n')
@@ -447,9 +470,9 @@ export function createHermesAdapter({
         apiBase: detection.apiBase,
         envVars,
         timeoutMs,
-        instructions: buildH2AStreamInstructions({ localAgentId, selectedSkill }),
+        instructions: buildH2AStreamInstructions({ localAgentId, selectedSkill, item }),
         conversation: hermesConversation,
-        input: buildH2AStreamPrompt({ item, conversationTranscript }),
+        input: buildH2AStreamPrompt({ localAgentId, selectedSkill, item, conversationTranscript }),
         onTextDelta: (delta) => {
           streamedText += `${delta ?? ''}`
           return emitTextDelta(emitStreamEvent, { delta, source: 'hermes' })
