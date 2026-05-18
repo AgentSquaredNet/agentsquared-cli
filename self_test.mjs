@@ -11,6 +11,7 @@ import { findLocalOfficialSkill, findOfficialSkillsRoot } from './lib/conversati
 import { normalizeConversationControl } from './lib/conversation/policy.mjs'
 import { buildReceiverBaseReport, buildSenderBaseReport, renderConversationDetails } from './lib/conversation/templates.mjs'
 import { createInboxStore } from './lib/gateway/inbox.mjs'
+import { buildEd25519Bundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
 import { createAgentRouter } from './lib/routing/agent_router.mjs'
 import { agentSquaredAgentIdForWire, normalizeAgentSquaredAgentId, parseAgentSquaredAgentId } from './lib/shared/agent_id.mjs'
 
@@ -110,6 +111,24 @@ for (const required of ['Conversation result', 'Conversation ID', 'Sender:', 'Re
   assert(rendered.includes(required), `new report template phrase is missing: ${required}`)
 }
 assert(normalizeConversationControl({ stopReason: 'skill-unavailable', decision: 'done' }).stopReason === 'skill-unavailable', 'skill-unavailable must be preserved as a final conversation status')
+
+const keyGuardDir = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-key-guard-'))
+try {
+  const keyFile = path.join(keyGuardDir, 'runtime-key.json')
+  const firstBundle = buildEd25519Bundle()
+  const secondBundle = buildEd25519Bundle()
+  writeRuntimeKeyBundle(keyFile, firstBundle, { overwrite: false })
+  try {
+    writeRuntimeKeyBundle(keyFile, secondBundle, { overwrite: false })
+    assert(false, 'runtime key writer should refuse to overwrite an existing key when overwrite=false')
+  } catch (error) {
+    assert(error?.code === 'EEXIST', 'runtime key writer should fail with EEXIST when overwrite=false')
+  }
+  const saved = JSON.parse(fs.readFileSync(keyFile, 'utf8'))
+  assert(saved.publicKey === firstBundle.publicKey, 'failed exclusive key write must not replace the existing runtime key')
+} finally {
+  fs.rmSync(keyGuardDir, { recursive: true, force: true })
+}
 
 const inboxDir = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-inbox-smoke-'))
 try {

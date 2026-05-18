@@ -1120,8 +1120,10 @@ async function registerAgent(args) {
   const displayName = clean(args['display-name']) || agentName
   const detectedHostRuntime = args.__detectedHostRuntime ?? null
   const keyFile = resolveUserPath(args['key-file'] || defaultRuntimeKeyFile(agentName, args, detectedHostRuntime))
+  if (fs.existsSync(keyFile)) {
+    throw new Error(`Refusing to overwrite existing AgentSquared runtime key at ${keyFile}. Reuse the existing local activation, choose a different --key-file, or intentionally remove the abandoned key before onboarding again.`)
+  }
   const keyBundle = generateRuntimeKeyBundle(keyTypeName)
-  writeRuntimeKeyBundle(keyFile, keyBundle)
 
   const response = await fetch(`${apiBase.replace(/\/$/, '')}/api/onboard/register`, {
     method: 'POST',
@@ -1141,6 +1143,7 @@ async function registerAgent(args) {
     throw new Error(payload?.message || payload?.error || `Agent registration failed with status ${response.status}`)
   }
   const result = payload?.value ?? payload
+  writeRuntimeKeyBundle(keyFile, keyBundle, { overwrite: false })
   const receiptFile = receiptFileFor(keyFile, result.fullName || `${agentName}@unknown`)
   writeJson(receiptFile, result)
   return {
