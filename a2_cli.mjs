@@ -13,7 +13,7 @@ import { runGatewayDoctor } from './lib/gateway/doctor.mjs'
 import { resolveGatewayBase, defaultGatewayStateFile, readGatewayState, currentRuntimeRevision } from './lib/gateway/state.mjs'
 import { runAgentSquaredUpdate } from './lib/gateway/update.mjs'
 import { getFriendDirectory } from './lib/transport/relay_http.mjs'
-import { generateRuntimeKeyBundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
+import { generateRuntimeKeyBundle, loadRuntimeKeyBundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
 import { runGateway } from './lib/gateway/server.mjs'
 import { SUPPORTED_HOST_RUNTIMES, createHostRuntimeAdapter, detectHostRuntimeEnvironment } from './adapters/index.mjs'
 import { buildHermesProcessEnv } from './adapters/hermes/common.mjs'
@@ -37,11 +37,11 @@ import { createLocalRuntimeExecutor } from './lib/runtime/executor.mjs'
 import { createLiveConversationStore } from './lib/conversation/store.mjs'
 import { clampConversationMaxTurns, normalizeConversationControl, normalizeSharedSkillName, parseSkillDocumentPolicy, shouldContinueConversation } from './lib/conversation/policy.mjs'
 import {
-  assertNoExistingLocalActivation,
   buildGatewayArgs,
   discoverLocalAgentProfiles,
   ensureGatewayForUse,
   inspectExistingGateway,
+  onboardingTokenTargetAgentId,
   resolveAgentContext,
   resolvedHostRuntimeFromHealth,
   signedRelayContext,
@@ -846,6 +846,17 @@ function classifyGatewayFailure(error = '', hostRuntime = null) {
       ]
     }
   }
+  if (lower.includes('agent_already_active') || lower.includes('already has an active agentsquared gateway')) {
+    return {
+      code: 'agent-already-active',
+      retryable: false,
+      guidance: [
+        'Another gateway is already active for this AgentSquared Agent ID.',
+        'Stop the other gateway or wait for its lease to expire, then restart this gateway.',
+        'Do not rerun onboarding or regenerate the runtime key.'
+      ]
+    }
+  }
   if (lower.includes('relay') || lower.includes('reservation') || lower.includes('presence') || lower.includes('too many requests') || lower.includes('429')) {
     return {
       code: 'relay-startup-failed',
@@ -1111,6 +1122,46 @@ function describeErrorForOutput(error = null, seen = new Set()) {
   return [...new Set(parts)].join('; ')
 }
 
+function agentScopeDirForKeyFile(keyFile) {
+  return path.dirname(path.dirname(resolveUserPath(keyFile)))
+}
+
+function findLocalProfileByAgentId(agentId) {
+  const normalized = clean(agentId).toLowerCase()
+  if (!normalized) {
+    return null
+  }
+  return discoverLocalAgentProfiles()
+    .find((profile) => clean(profile.agentId).toLowerCase() === normalized && clean(profile.keyFile) && clean(profile.receiptFile)) || null
+}
+
+function loadValidatedRegistrationProfile(profile) {
+  const keyFile = resolveUserPath(profile.keyFile)
+  const receiptFile = resolveUserPath(profile.receiptFile)
+  const keyBundle = loadRuntimeKeyBundle(keyFile)
+  const receipt = readJson(receiptFile)
+  const receiptPublicKey = clean(receipt.publicKey)
+  if (!receiptPublicKey) {
+    throw new Error(`Existing AgentSquared registration receipt is missing publicKey: ${receiptFile}`)
+  }
+  if (clean(keyBundle.publicKey) !== receiptPublicKey) {
+    throw new Error(`Existing AgentSquared runtime key does not match the registration receipt. keyFile=${keyFile} receiptFile=${receiptFile}`)
+  }
+  return {
+    keyFile,
+    keyBundle,
+    receiptFile,
+    result: receipt
+  }
+}
+
+function pendingRuntimeKeyFile(args = {}, agentName = '') {
+  const root = resolveAgentSquaredDir(args)
+  const label = clean(agentName).replace(/[^a-zA-Z0-9_.-]+/g, '_').toLowerCase() || 'agent'
+  const nonce = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`
+  return path.join(root, 'pending', `${label}-${nonce}`, 'identity', 'runtime-key.json')
+}
+
 
 async function registerAgent(args) {
   const apiBase = clean(args['api-base']) || 'https://api.agentsquared.net'
@@ -1119,11 +1170,9 @@ async function registerAgent(args) {
   const keyTypeName = clean(args['key-type']) || 'ed25519'
   const displayName = clean(args['display-name']) || agentName
   const detectedHostRuntime = args.__detectedHostRuntime ?? null
-  const keyFile = resolveUserPath(args['key-file'] || defaultRuntimeKeyFile(agentName, args, detectedHostRuntime))
-  if (fs.existsSync(keyFile)) {
-    throw new Error(`Refusing to overwrite existing AgentSquared runtime key at ${keyFile}. Reuse the existing local activation, choose a different --key-file, or intentionally remove the abandoned key before onboarding again.`)
-  }
   const keyBundle = generateRuntimeKeyBundle(keyTypeName)
+  const pendingKeyFile = pendingRuntimeKeyFile(args, agentName)
+  writeRuntimeKeyBundle(pendingKeyFile, keyBundle, { overwrite: false })
 
   const response = await fetch(`${apiBase.replace(/\/$/, '')}/api/onboard/register`, {
     method: 'POST',
@@ -1140,10 +1189,21 @@ async function registerAgent(args) {
   })
   const payload = await response.json()
   if (!response.ok) {
-    throw new Error(payload?.message || payload?.error || `Agent registration failed with status ${response.status}`)
+    throw new Error(`${payload?.message || payload?.error || `Agent registration failed with status ${response.status}`} Pending runtime key was left outside the active profile at ${pendingKeyFile}.`)
   }
   const result = payload?.value ?? payload
-  writeRuntimeKeyBundle(keyFile, keyBundle, { overwrite: false })
+  const fullName = clean(result.fullName) || `${agentName}@unknown`
+  const keyFile = resolveUserPath(args['key-file'] || defaultRuntimeKeyFile(fullName, args, detectedHostRuntime))
+  if (fs.existsSync(keyFile)) {
+    throw new Error(`Refusing to overwrite existing AgentSquared runtime key at ${keyFile}. Reuse the existing local activation, choose a different Agent ID, or intentionally remove the abandoned profile before onboarding again.`)
+  }
+  fs.mkdirSync(path.dirname(keyFile), { recursive: true })
+  fs.renameSync(pendingKeyFile, keyFile)
+  try {
+    fs.rmSync(path.dirname(path.dirname(pendingKeyFile)), { recursive: true, force: true })
+  } catch {
+    // best-effort cleanup only
+  }
   const receiptFile = receiptFileFor(keyFile, result.fullName || `${agentName}@unknown`)
   writeJson(receiptFile, result)
   return {
@@ -1157,7 +1217,9 @@ async function registerAgent(args) {
 
 async function commandOnboard(args) {
   const authorizationToken = clean(args['authorization-token'])
-  assertNoExistingLocalActivation(authorizationToken)
+  if (!authorizationToken) {
+    throw new Error('--authorization-token is required for onboarding.')
+  }
   const hostOptions = buildCliHostOptions(args)
   const detectedHostRuntime = await detectHostRuntimeEnvironment({
     preferred: hostOptions.preferredHostRuntime,
@@ -1165,13 +1227,18 @@ async function commandOnboard(args) {
     hermes: hostOptions.hermes
   })
   assertSupportedActivationHostRuntime(detectedHostRuntime)
-  if (!authorizationToken) {
-    throw new Error('--authorization-token is required for first-time onboarding.')
-  }
-  const registration = await registerAgent({
-    ...args,
-    __detectedHostRuntime: detectedHostRuntime
-  })
+  const targetAgentId = onboardingTokenTargetAgentId(authorizationToken)
+  const existingProfile = findLocalProfileByAgentId(targetAgentId)
+  const registration = existingProfile
+    ? {
+        apiBase: clean(args['api-base']) || 'https://api.agentsquared.net',
+        ...loadValidatedRegistrationProfile(existingProfile),
+        reusedLocalProfile: true
+      }
+    : await registerAgent({
+        ...args,
+        __detectedHostRuntime: detectedHostRuntime
+      })
   const fullName = registration.result.fullName
   const gatewayStateFile = clean(args['gateway-state-file']) || defaultGatewayStateFile(registration.keyFile, fullName)
   const previousGatewayState = readGatewayState(gatewayStateFile)
@@ -1217,8 +1284,8 @@ async function commandOnboard(args) {
         logFile: gatewayLogFileFor(registration.keyFile, fullName),
         pid: existingGateway.pid
       }
-	    } else if (existingGateway.running) {
-	      gateway = {
+    } else if (existingGateway.running && !registration.reusedLocalProfile) {
+      gateway = {
         started: false,
         launchRequested: true,
         pending: true,
@@ -1226,17 +1293,48 @@ async function commandOnboard(args) {
         health: existingGateway.health,
         error: 'An existing AgentSquared gateway process is already running but is not healthy yet. Use `a2-cli gateway restart ...` instead of starting another one.',
         logFile: gatewayLogFileFor(registration.keyFile, fullName),
-	        pid: existingGateway.pid
-	      }
-	    } else {
-	      let archivedGatewayStateFile = ''
-	      if (existingGateway.stateFile && existingGateway.state) {
-	        const staleState = !existingGateway.revisionMatches || !clean(existingGateway.state?.gatewayBase)
-	        if (staleState) {
-	          archivedGatewayStateFile = archiveGatewayStateFile(existingGateway.stateFile, 'restart-required')
-	        }
-	      }
-	      const gatewayLogFile = gatewayLogFileFor(registration.keyFile, fullName)
+        pid: existingGateway.pid
+      }
+    } else if (registration.reusedLocalProfile && (!existingGateway.running || !existingGateway.healthy)) {
+      try {
+        const restarted = await commandGatewayRestart({
+          ...args,
+          'agent-id': fullName,
+          'key-file': registration.keyFile,
+          'gateway-wait-ms': args['gateway-wait-ms'] || '90000'
+        }, [], { print: false })
+        gateway = {
+          started: true,
+          launchRequested: true,
+          pending: false,
+          gatewayBase: restarted.gatewayBase,
+          health: restarted.health,
+          error: '',
+          logFile: restarted.gatewayLogFile,
+          pid: restarted.gatewayPid ?? null,
+          recoveredExistingProfile: true
+        }
+      } catch (error) {
+        gateway = {
+          started: false,
+          launchRequested: true,
+          pending: false,
+          gatewayBase: existingGateway.gatewayBase,
+          health: existingGateway.health,
+          error: error.message,
+          logFile: gatewayLogFileFor(registration.keyFile, fullName),
+          pid: existingGateway.pid
+        }
+      }
+    } else {
+      let archivedGatewayStateFile = ''
+      if (existingGateway.stateFile && existingGateway.state) {
+        const staleState = !existingGateway.revisionMatches || !clean(existingGateway.state?.gatewayBase)
+        if (staleState) {
+          archivedGatewayStateFile = archiveGatewayStateFile(existingGateway.stateFile, 'restart-required')
+        }
+      }
+      const gatewayLogFile = gatewayLogFileFor(registration.keyFile, fullName)
       fs.mkdirSync(path.dirname(gatewayLogFile), { recursive: true })
       const stdoutFd = fs.openSync(gatewayLogFile, 'a')
       const stderrFd = fs.openSync(gatewayLogFile, 'a')
@@ -1258,33 +1356,33 @@ async function commandOnboard(args) {
           gatewayStateFile: clean(args['gateway-state-file']),
           timeoutMs: Number.parseInt(args['gateway-wait-ms'] ?? '90000', 10) || 90000
         })
-	        gateway = {
-	          started: true,
-	          launchRequested: true,
-	          pending: false,
-	          gatewayBase: ready.gatewayBase,
-	          health: ready.health,
-	          error: '',
-	          logFile: gatewayLogFile,
-	          pid: child.pid ?? null,
-	          archivedGatewayStateFile
-	        }
-	      } catch (error) {
+        gateway = {
+          started: true,
+          launchRequested: true,
+          pending: false,
+          gatewayBase: ready.gatewayBase,
+          health: ready.health,
+          error: '',
+          logFile: gatewayLogFile,
+          pid: child.pid ?? null,
+          archivedGatewayStateFile
+        }
+      } catch (error) {
         const gatewayState = readGatewayState(gatewayStateFile)
         const discoveredPid = gatewayState?.gatewayPid ?? child.pid ?? null
         const discoveredBase = clean(gatewayState?.gatewayBase)
         const failure = classifyGatewayFailure(error.message, detectedHostRuntime)
-	        gateway.pending = pidExists(discoveredPid)
-	        gateway.gatewayBase = discoveredBase
-	        gateway.pid = parsePid(discoveredPid)
-	        gateway.error = error.message
-	        gateway.failure = failure
-	        gateway.archivedGatewayStateFile = archivedGatewayStateFile
-	      }
-	    }
+        gateway.pending = pidExists(discoveredPid)
+        gateway.gatewayBase = discoveredBase
+        gateway.pid = parsePid(discoveredPid)
+        gateway.error = error.message
+        gateway.failure = failure
+        gateway.archivedGatewayStateFile = archivedGatewayStateFile
+      }
+    }
   }
 
-  const agentsquaredDir = path.dirname(resolveUserPath(registration.keyFile))
+  const agentsquaredDir = agentScopeDirForKeyFile(registration.keyFile)
   const inboxDir = defaultInboxDir(registration.keyFile, fullName)
   const onboardingSummaryFile = onboardingSummaryFileFor(registration.keyFile, fullName)
   const standardReport = buildStandardRuntimeReport({
@@ -1299,6 +1397,7 @@ async function commandOnboard(args) {
   })
   const summary = {
     setupComplete: true,
+    reusedLocalProfile: Boolean(registration.reusedLocalProfile),
     apiBase: registration.apiBase,
     agentsquaredDir,
     hostRuntime: detectedHostRuntime,
@@ -1313,7 +1412,9 @@ async function commandOnboard(args) {
     gateway,
     standardReport,
     ownerFacingLines: [
-      'AgentSquared setup is complete.',
+      registration.reusedLocalProfile
+        ? 'AgentSquared setup is already complete; the existing local profile was reused.'
+        : 'AgentSquared setup is complete.',
       `Agent: ${registration.result.fullName}`,
       `AgentSquared directory: ${agentsquaredDir}.`,
       `Host runtime: ${detectedHostRuntime.resolved !== 'none' ? detectedHostRuntime.resolved : `not bound (${detectedHostRuntime.suggested || defaultSuggestedHostRuntime()} suggested)`}.`,
@@ -1341,20 +1442,32 @@ async function commandOnboard(args) {
 }
 
 async function commandGateway(args, rawArgs) {
+  let resolvedArgs = { ...args }
+  let resolvedRawArgs = [...rawArgs]
+  if (!clean(args['agent-id']) || !clean(args['key-file'])) {
+    const context = resolveAgentContext(args)
+    resolvedArgs = {
+      ...resolvedArgs,
+      'agent-id': clean(args['agent-id']) || context.agentId,
+      'key-file': clean(args['key-file']) || context.keyFile,
+      'gateway-state-file': clean(args['gateway-state-file']) || context.gatewayStateFile
+    }
+    resolvedRawArgs = buildGatewayArgs(resolvedArgs, resolvedArgs['agent-id'], resolvedArgs['key-file'], null)
+  }
   const existingGateway = await inspectExistingGateway({
-    gatewayBase: args['gateway-base'],
-    keyFile: args['key-file'],
-    agentId: args['agent-id'],
-    gatewayStateFile: args['gateway-state-file']
+    gatewayBase: resolvedArgs['gateway-base'],
+    keyFile: resolvedArgs['key-file'],
+    agentId: resolvedArgs['agent-id'],
+    gatewayStateFile: resolvedArgs['gateway-state-file']
   })
   if (existingGateway.running && !existingGateway.revisionMatches) {
     throw new Error('An AgentSquared gateway process is already running from an older @agentsquared/cli revision. Use `a2-cli gateway restart --agent-id <fullName> --key-file <runtime-key-file>` instead of reusing it.')
   }
   if (existingGateway.running && existingGateway.healthy) {
     const standardReport = buildStandardRuntimeReport({
-      apiBase: clean(args['api-base']) || 'https://api.agentsquared.net',
-      agentId: clean(existingGateway.state?.agentId) || clean(args['agent-id']),
-      keyFile: clean(existingGateway.state?.keyFile) || clean(args['key-file']),
+      apiBase: clean(resolvedArgs['api-base']) || 'https://api.agentsquared.net',
+      agentId: clean(existingGateway.state?.agentId) || clean(resolvedArgs['agent-id']),
+      keyFile: clean(existingGateway.state?.keyFile) || clean(resolvedArgs['key-file']),
       detectedHostRuntime: existingGateway.health?.hostRuntime ?? { resolved: resolvedHostRuntimeFromHealth(existingGateway.health) },
       gateway: {
         started: true,
@@ -1378,7 +1491,7 @@ async function commandGateway(args, rawArgs) {
   if (existingGateway.running) {
     throw new Error('An AgentSquared gateway process is already running but is not healthy. Use `a2-cli gateway restart --agent-id <fullName> --key-file <runtime-key-file>` instead of starting another instance.')
   }
-  await runGateway(rawArgs)
+  await runGateway(resolvedRawArgs)
 }
 
 async function commandGatewayRestart(args, rawArgs, {
@@ -2273,7 +2386,7 @@ function helpText() {
     '',
     'Public commands:',
     '  a2-cli host detect [host options]',
-    '  a2-cli onboard --authorization-token <jwt> --agent-name <name> --key-file <file>',
+    '  a2-cli onboard --authorization-token <jwt> --agent-name <name>',
     '  a2-cli local inspect',
     '  a2-cli gateway start --agent-id <id> --key-file <file> [gateway options]',
     '  a2-cli gateway health --agent-id <id> --key-file <file>',

@@ -11,9 +11,11 @@ import { findLocalOfficialSkill, findOfficialSkillsRoot } from './lib/conversati
 import { normalizeConversationControl } from './lib/conversation/policy.mjs'
 import { buildReceiverBaseReport, buildSenderBaseReport, renderConversationDetails } from './lib/conversation/templates.mjs'
 import { createInboxStore } from './lib/gateway/inbox.mjs'
+import { discoverLocalAgentProfiles } from './lib/gateway/lifecycle.mjs'
 import { buildEd25519Bundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
 import { createAgentRouter } from './lib/routing/agent_router.mjs'
 import { agentSquaredAgentIdForWire, normalizeAgentSquaredAgentId, parseAgentSquaredAgentId } from './lib/shared/agent_id.mjs'
+import { defaultGatewayStateFile, defaultPeerKeyFile, defaultRuntimeKeyFile } from './lib/shared/paths.mjs'
 
 function assert(condition, message) {
   if (!condition) {
@@ -31,7 +33,7 @@ function assertCliSmoke(argv, expected, message) {
 }
 
 assertCliSmoke(['--help'], 'AgentSquared CLI', 'a2-cli --help should load the public CLI entrypoint')
-assertCliSmoke(['--version'], '1.6.3', 'a2-cli --version should print package version')
+assertCliSmoke(['--version'], '1.6.5', 'a2-cli --version should print package version')
 assert(typeof resolveHermesOwnerTarget === 'function', 'Hermes adapter should export owner-route resolver used by CLI')
 
 assert(normalizeAgentSquaredAgentId('A2:Helper@ExampleOwner') === 'helper@exampleowner', 'A2-prefixed AgentSquared ID should provide a lowercase comparison key')
@@ -128,6 +130,29 @@ try {
   assert(saved.publicKey === firstBundle.publicKey, 'failed exclusive key write must not replace the existing runtime key')
 } finally {
   fs.rmSync(keyGuardDir, { recursive: true, force: true })
+}
+
+const profileHome = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-profile-home-'))
+const previousHome = process.env.HOME
+try {
+  process.env.HOME = profileHome
+  const keyFile = defaultRuntimeKeyFile('helper@ExampleOwner')
+  assert(keyFile === path.join(profileHome, '.a2', 'agents', 'helper_exampleowner', 'identity', 'runtime-key.json'), 'default runtime key should use ~/.a2/agents/<safe-agent-id>/identity/runtime-key.json')
+  const stateFile = defaultGatewayStateFile(keyFile, 'helper@ExampleOwner')
+  assert(stateFile === path.join(profileHome, '.a2', 'agents', 'helper_exampleowner', 'runtime', 'gateway.json'), 'default gateway state should use the profile runtime directory')
+  assert(defaultPeerKeyFile(keyFile, 'helper@ExampleOwner') === path.join(profileHome, '.a2', 'agents', 'helper_exampleowner', 'runtime', 'gateway-peer.key'), 'default peer key should be persistent per Agent ID')
+  fs.mkdirSync(path.dirname(keyFile), { recursive: true })
+  fs.writeFileSync(keyFile, '{}\n', 'utf8')
+  fs.writeFileSync(path.join(path.dirname(keyFile), 'registration-receipt.json'), JSON.stringify({ fullName: 'helper@ExampleOwner' }), 'utf8')
+  const profiles = discoverLocalAgentProfiles()
+  assert(profiles.some((profile) => profile.agentId === 'helper@ExampleOwner' && profile.keyFile === keyFile), 'profile discovery should find standard ~/.a2/agents profiles')
+} finally {
+  if (previousHome == null) {
+    delete process.env.HOME
+  } else {
+    process.env.HOME = previousHome
+  }
+  fs.rmSync(profileHome, { recursive: true, force: true })
 }
 
 const inboxDir = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-inbox-smoke-'))
