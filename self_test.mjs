@@ -4,7 +4,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 import { hermesProjectRoot } from './adapters/hermes/common.mjs'
-import { resolveHermesOwnerTarget } from './adapters/hermes/adapter.mjs'
+import { buildH2AResponseInput, resolveHermesOwnerTarget } from './adapters/hermes/adapter.mjs'
 import { ensureHermesApiServerNoMcpConfig } from './adapters/hermes/env.mjs'
 import { probeHermesMcp, resolveHermesOwnerTargetViaMcp, sendHermesOwnerMessageViaMcp } from './adapters/hermes/mcp_client.mjs'
 import { findLocalOfficialSkill, findOfficialSkillsRoot } from './lib/conversation/local_skills.mjs'
@@ -13,6 +13,7 @@ import { buildReceiverBaseReport, buildSenderBaseReport, renderConversationDetai
 import { createInboxStore } from './lib/gateway/inbox.mjs'
 import { discoverLocalAgentProfiles } from './lib/gateway/lifecycle.mjs'
 import { buildEd25519Bundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
+import { defaultInboundText, hasInboundImages, inboundImageParts } from './lib/runtime/adapter_pipeline.mjs'
 import { createAgentRouter } from './lib/routing/agent_router.mjs'
 import { agentSquaredAgentIdForWire, normalizeAgentSquaredAgentId, parseAgentSquaredAgentId } from './lib/shared/agent_id.mjs'
 import { defaultGatewayStateFile, defaultPeerKeyFile, defaultRuntimeKeyFile } from './lib/shared/paths.mjs'
@@ -33,8 +34,29 @@ function assertCliSmoke(argv, expected, message) {
 }
 
 assertCliSmoke(['--help'], 'AgentSquared CLI', 'a2-cli --help should load the public CLI entrypoint')
-assertCliSmoke(['--version'], '1.6.6', 'a2-cli --version should print package version')
+assertCliSmoke(['--version'], '1.6.7', 'a2-cli --version should print package version')
 assert(typeof resolveHermesOwnerTarget === 'function', 'Hermes adapter should export owner-route resolver used by CLI')
+
+const multimodalInbound = {
+  request: {
+    params: {
+      message: {
+        parts: [
+          { kind: 'text', text: 'Describe this image.' },
+          { kind: 'image', mimeType: 'image/png', source: { type: 'url', url: 'https://example.com/cat.png' } },
+          { kind: 'image', mimeType: 'image/jpeg', source: { type: 'base64', mediaType: 'image/jpeg', data: 'aGVsbG8=' } }
+        ]
+      }
+    }
+  }
+}
+assert(defaultInboundText(multimodalInbound) === 'Describe this image.', 'inbound text extraction should preserve text from multimodal requests')
+assert(hasInboundImages(multimodalInbound) === true, 'inbound image detection should identify multimodal H2A requests')
+assert(inboundImageParts(multimodalInbound).length === 2, 'inbound image extraction should preserve all image parts')
+const hermesInput = buildH2AResponseInput({ text: 'Context plus prompt.', item: multimodalInbound })
+assert(Array.isArray(hermesInput) && hermesInput[0]?.content?.length === 3, 'Hermes H2A input builder should emit Responses content parts')
+assert(hermesInput[0].content[1].type === 'input_image' && hermesInput[0].content[1].image_url === 'https://example.com/cat.png', 'Hermes H2A input builder should preserve image URLs')
+assert(hermesInput[0].content[2].image_url.startsWith('data:image/jpeg;base64,'), 'Hermes H2A input builder should convert base64 images to data URLs')
 
 assert(normalizeAgentSquaredAgentId('A2:Helper@ExampleOwner') === 'helper@exampleowner', 'A2-prefixed AgentSquared ID should provide a lowercase comparison key')
 assert(normalizeAgentSquaredAgentId('helper@ExampleOwner') === 'helper@exampleowner', 'bare AgentSquared ID should provide a lowercase comparison key')

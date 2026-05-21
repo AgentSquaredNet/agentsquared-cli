@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { buildConversationSummaryPrompt, normalizeConversationSummary } from '../../lib/conversation/templates.mjs'
 import { buildInboundPlatformContext } from '../../lib/conversation/platform_context.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
-import { createInboundAdapterPipeline } from '../../lib/runtime/adapter_pipeline.mjs'
+import { createInboundAdapterPipeline, defaultInboundText, inboundImageParts } from '../../lib/runtime/adapter_pipeline.mjs'
 import { checkHermesApiServerHealth, extractHermesResponseText, postHermesResponse, postHermesResponseStream } from './api_client.mjs'
 import { buildHermesProcessEnv } from './common.mjs'
 import { detectHermesHostEnvironment } from './detect.mjs'
@@ -26,7 +26,42 @@ function clean(value) {
 }
 
 function h2aInboundText(item = null) {
-  return clean(item?.request?.params?.message?.parts?.[0]?.text || item?.request?.params?.message?.text || '')
+  return defaultInboundText(item)
+}
+
+function imageSourceURL(part = null) {
+  const source = part?.source ?? {}
+  const sourceType = clean(source?.type).toLowerCase()
+  if (sourceType === 'url') {
+    return clean(source?.url)
+  }
+  if (sourceType === 'base64') {
+    const mediaType = clean(source?.mediaType || source?.media_type || part?.mimeType || 'image/png')
+    const data = clean(source?.data)
+    return data ? `data:${mediaType};base64,${data}` : ''
+  }
+  return ''
+}
+
+export function buildH2AResponseInput({
+  text = '',
+  item = null
+} = {}) {
+  const content = []
+  const cleanText = clean(text)
+  if (cleanText) {
+    content.push({ type: 'input_text', text: cleanText })
+  }
+  for (const image of inboundImageParts(item)) {
+    const imageUrl = imageSourceURL(image)
+    if (imageUrl) {
+      content.push({ type: 'input_image', image_url: imageUrl, detail: clean(image?.detail) || 'auto' })
+    }
+  }
+  if (content.length === 0) {
+    return cleanText
+  }
+  return [{ role: 'user', content }]
 }
 
 function buildH2AStreamInstructions({
@@ -472,7 +507,10 @@ export function createHermesAdapter({
         timeoutMs,
         instructions: buildH2AStreamInstructions({ localAgentId, selectedSkill, item }),
         conversation: hermesConversation,
-        input: buildH2AStreamPrompt({ localAgentId, selectedSkill, item, conversationTranscript }),
+        input: buildH2AResponseInput({
+          text: buildH2AStreamPrompt({ localAgentId, selectedSkill, item, conversationTranscript }),
+          item
+        }),
         onTextDelta: (delta) => {
           streamedText += `${delta ?? ''}`
           return emitTextDelta(emitStreamEvent, { delta, source: 'hermes' })

@@ -2,7 +2,7 @@ import { withOpenClawGatewayClient } from './ws_client.mjs'
 import { buildConversationSummaryPrompt, normalizeConversationSummary, parseAgentSquaredOutboundEnvelope } from '../../lib/conversation/templates.mjs'
 import { buildInboundPlatformContext } from '../../lib/conversation/platform_context.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
-import { createInboundAdapterPipeline } from '../../lib/runtime/adapter_pipeline.mjs'
+import { createInboundAdapterPipeline, defaultInboundText, hasInboundImages } from '../../lib/runtime/adapter_pipeline.mjs'
 import {
   buildOpenClawCombinedPrompt,
   buildOpenClawSafetyPrompt,
@@ -48,7 +48,7 @@ async function sleep(ms) {
 }
 
 function h2aInboundText(item = null) {
-  return clean(item?.request?.params?.message?.parts?.[0]?.text || item?.request?.params?.message?.text || '')
+  return defaultInboundText(item)
 }
 
 function buildOpenClawH2AStreamPrompt({
@@ -84,6 +84,16 @@ function buildOpenClawH2AStreamPrompt({
     clean(conversationTranscript) ? `Conversation so far:\n${clean(conversationTranscript)}` : '',
     `Human message:\n${h2aInboundText(item)}`
   ].filter(Boolean).join('\n\n')
+}
+
+function throwOpenClawMultimodalUnsupported(item = null) {
+  if (!hasInboundImages(item)) {
+    return
+  }
+  const error = new Error('OpenClaw adapter does not support image input yet. Use a text-only request or a runtime with image input support.')
+  error.code = 400
+  error.detailCode = 'runtime_multimodal_unsupported'
+  throw error
 }
 
 function openClawEventRunId(event = null) {
@@ -403,6 +413,7 @@ export function createOpenClawAdapter({
       inboundId
     }) => {
       const { client, gatewayContext } = runtimeContext
+      throwOpenClawMultimodalUnsupported(item)
       const sessionKey = stableId(
         'agentsquared-work',
         localAgentId,
@@ -482,6 +493,7 @@ export function createOpenClawAdapter({
       emitStreamEvent
     }) => {
       const { client, gatewayContext } = runtimeContext
+      throwOpenClawMultimodalUnsupported(item)
       const sessionKey = stableId(
         'agentsquared-h2a-stream',
         localAgentId,
