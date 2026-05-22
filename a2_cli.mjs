@@ -1776,7 +1776,7 @@ async function commandFriendList(args) {
   const ctx = await signedRelayContext(args)
   const directory = await getFriendDirectory(ctx.apiBase, ctx.agentId, ctx.bundle, ctx.transport)
   printJson({
-    source: 'relay-friend-directory',
+    source: 'relay-following-directory',
     apiBase: ctx.apiBase,
     agentId: ctx.agentId,
     gatewayBase: ctx.gatewayBase,
