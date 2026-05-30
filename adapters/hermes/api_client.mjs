@@ -147,6 +147,26 @@ export function extractHermesResponseText(payload = null) {
   return clean(textBlock?.text)
 }
 
+export function extractHermesRuntimeUsage(payload = null) {
+  const usage = payload?.usage
+    ?? payload?.response?.usage
+    ?? payload?.metadata?.usage
+  const input = Number.parseInt(`${usage?.input_tokens ?? usage?.inputTokens ?? ''}`, 10)
+  const output = Number.parseInt(`${usage?.output_tokens ?? usage?.outputTokens ?? ''}`, 10)
+  if (!Number.isFinite(input) || !Number.isFinite(output) || input < 0 || output < 0) {
+    return null
+  }
+  return {
+    runtime: 'hermes',
+    usageMode: 'two_tier',
+    accurate: true,
+    inputTokens: input,
+    outputTokens: output,
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: null
+  }
+}
+
 export function hermesResponseToolCalls(payload = null) {
   const output = Array.isArray(payload?.output) ? payload.output : []
   return output

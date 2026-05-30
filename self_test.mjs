@@ -4,6 +4,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 import { hermesProjectRoot } from './adapters/hermes/common.mjs'
+import { extractHermesRuntimeUsage } from './adapters/hermes/api_client.mjs'
 import { buildH2AResponseInput, resolveHermesOwnerTarget } from './adapters/hermes/adapter.mjs'
 import { ensureHermesApiServerNoMcpConfig } from './adapters/hermes/env.mjs'
 import { probeHermesMcp, resolveHermesOwnerTargetViaMcp, sendHermesOwnerMessageViaMcp } from './adapters/hermes/mcp_client.mjs'
@@ -34,7 +35,7 @@ function assertCliSmoke(argv, expected, message) {
 }
 
 assertCliSmoke(['--help'], 'AgentSquared CLI', 'a2-cli --help should load the public CLI entrypoint')
-assertCliSmoke(['--version'], '1.6.7', 'a2-cli --version should print package version')
+assertCliSmoke(['--version'], '1.6.8', 'a2-cli --version should print package version')
 assert(typeof resolveHermesOwnerTarget === 'function', 'Hermes adapter should export owner-route resolver used by CLI')
 
 const multimodalInbound = {
@@ -57,6 +58,8 @@ const hermesInput = buildH2AResponseInput({ text: 'Context plus prompt.', item: 
 assert(Array.isArray(hermesInput) && hermesInput[0]?.content?.length === 3, 'Hermes H2A input builder should emit Responses content parts')
 assert(hermesInput[0].content[1].type === 'input_image' && hermesInput[0].content[1].image_url === 'https://example.com/cat.png', 'Hermes H2A input builder should preserve image URLs')
 assert(hermesInput[0].content[2].image_url.startsWith('data:image/jpeg;base64,'), 'Hermes H2A input builder should convert base64 images to data URLs')
+const hermesUsage = extractHermesRuntimeUsage({ usage: { input_tokens: 120, output_tokens: 34, total_tokens: 154 } })
+assert(hermesUsage?.runtime === 'hermes' && hermesUsage?.usageMode === 'two_tier' && hermesUsage?.inputTokens === 120 && hermesUsage?.outputTokens === 34, 'Hermes usage extraction should emit accurate two-tier runtime usage')
 
 assert(normalizeAgentSquaredAgentId('A2:Helper@ExampleOwner') === 'helper@exampleowner', 'A2-prefixed AgentSquared ID should provide a lowercase comparison key')
 assert(normalizeAgentSquaredAgentId('helper@ExampleOwner') === 'helper@exampleowner', 'bare AgentSquared ID should provide a lowercase comparison key')

@@ -4,7 +4,7 @@ import { buildConversationSummaryPrompt, normalizeConversationSummary } from '..
 import { buildInboundPlatformContext } from '../../lib/conversation/platform_context.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import { createInboundAdapterPipeline, defaultInboundText, inboundImageParts } from '../../lib/runtime/adapter_pipeline.mjs'
-import { checkHermesApiServerHealth, extractHermesResponseText, postHermesResponse, postHermesResponseStream } from './api_client.mjs'
+import { checkHermesApiServerHealth, extractHermesResponseText, extractHermesRuntimeUsage, postHermesResponse, postHermesResponseStream } from './api_client.mjs'
 import { buildHermesProcessEnv } from './common.mjs'
 import { detectHermesHostEnvironment } from './detect.mjs'
 import { readHermesEnv } from './env.mjs'
@@ -482,7 +482,8 @@ export function createHermesAdapter({
         parsed,
         runtimeMetadata: {
           hermesConversation,
-          hermesApiBase: detection.apiBase
+          hermesApiBase: detection.apiBase,
+          usage: extractHermesRuntimeUsage(taskPayload)
         }
       }
     },
@@ -517,6 +518,7 @@ export function createHermesAdapter({
         }
       })
       const replyText = scrubOutboundText(extractHermesResponseText(payload))
+      const usage = extractHermesRuntimeUsage(payload)
       if (!streamedText && replyText) {
         await emitTextDelta(emitStreamEvent, { delta: replyText, source: 'hermes' })
       } else if (streamedText && replyText.startsWith(streamedText) && replyText.length > streamedText.length) {
@@ -537,7 +539,8 @@ export function createHermesAdapter({
               decision: defaultDecision,
               stopReason: defaultStopReason,
               final: defaultDecision === 'done',
-              finalize: defaultDecision === 'done'
+              finalize: defaultDecision === 'done',
+              ...(usage ? { usage } : {})
             }
           },
           ownerSummary: replyText
@@ -546,7 +549,8 @@ export function createHermesAdapter({
           hermesConversation,
           hermesApiBase: detection.apiBase,
           stream: true,
-          inboundId
+          inboundId,
+          usage
         }
       }
     }

@@ -115,6 +115,60 @@ function openClawEventTextDelta(event = null) {
     ?? ''}`
 }
 
+function numberOrNull(value) {
+  const parsed = Number.parseInt(`${value ?? ''}`, 10)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
+function findOpenClawUsage(value = null, depth = 0) {
+  if (!value || typeof value !== 'object' || depth > 8) {
+    return null
+  }
+  const candidates = [
+    value?.agentMeta?.usage,
+    value?.agentMeta?.lastCallUsage,
+    value?.metadata?.agentMeta?.usage,
+    value?.metadata?.agentMeta?.lastCallUsage,
+    value?.meta?.agentMeta?.usage,
+    value?.meta?.agentMeta?.lastCallUsage,
+    value?.usage,
+    value?.lastCallUsage
+  ].filter(Boolean)
+  for (const usage of candidates) {
+    const fresh = usage?.totalTokensFresh ?? usage?.fresh ?? value?.agentMeta?.totalTokensFresh ?? value?.metadata?.agentMeta?.totalTokensFresh
+    if (fresh === false) {
+      continue
+    }
+    const input = numberOrNull(usage.input ?? usage.inputTokens ?? usage.promptTokens)
+    const output = numberOrNull(usage.output ?? usage.outputTokens ?? usage.completionTokens)
+    const cacheWrite = numberOrNull(usage.cacheWrite ?? usage.cacheCreationInputTokens ?? usage.cacheCreation)
+    const cacheRead = numberOrNull(usage.cacheRead ?? usage.cacheReadInputTokens)
+    if (input != null && output != null && cacheWrite != null && cacheRead != null) {
+      return {
+        runtime: 'openclaw',
+        usageMode: 'four_tier',
+        accurate: true,
+        inputTokens: input,
+        outputTokens: output,
+        cacheCreationInputTokens: cacheWrite,
+        cacheReadInputTokens: cacheRead
+      }
+    }
+  }
+  for (const nested of Object.values(value)) {
+    if (Array.isArray(nested)) {
+      for (const item of nested) {
+        const found = findOpenClawUsage(item, depth + 1)
+        if (found) return found
+      }
+    } else if (nested && typeof nested === 'object') {
+      const found = findOpenClawUsage(nested, depth + 1)
+      if (found) return found
+    }
+  }
+  return null
+}
+
 async function emitTextDelta(emitStreamEvent, {
   delta = '',
   source = ''
@@ -576,6 +630,7 @@ export function createOpenClawAdapter({
           sessionKey,
           limit: 12
         }, timeoutMs, 'H2A stream final chat history')
+        const usage = findOpenClawUsage({ waited, history })
         const replyText = scrubOutboundText(resolveFinalAssistantResultText({
           waited,
           history,
@@ -603,7 +658,8 @@ export function createOpenClawAdapter({
                 decision: defaultDecision,
                 stopReason: defaultStopReason,
                 final: defaultDecision === 'done',
-                finalize: defaultDecision === 'done'
+                finalize: defaultDecision === 'done',
+                ...(usage ? { usage } : {})
               }
             },
             ownerSummary: replyText
@@ -613,7 +669,8 @@ export function createOpenClawAdapter({
             openclawSessionKey: sessionKey,
             openclawGatewayUrl: gatewayContext.gatewayUrl,
             stream: true,
-            inboundId
+            inboundId,
+            usage
           }
         }
       } finally {
