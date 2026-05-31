@@ -35,7 +35,7 @@ function assertCliSmoke(argv, expected, message) {
 }
 
 assertCliSmoke(['--help'], 'AgentSquared CLI', 'a2-cli --help should load the public CLI entrypoint')
-assertCliSmoke(['--version'], '1.6.9', 'a2-cli --version should print package version')
+assertCliSmoke(['--version'], '1.6.11', 'a2-cli --version should print package version')
 assert(typeof resolveHermesOwnerTarget === 'function', 'Hermes adapter should export owner-route resolver used by CLI')
 
 const multimodalInbound = {
@@ -426,5 +426,108 @@ assert(unavailableExecuted === false, 'missing local official skill should not i
 assert(unavailableResponded?.metadata?.stopReason === 'skill-unavailable', 'missing local official skill should send a final skill-unavailable peer response')
 assert(unavailableResponded?.metadata?.final === true, 'skill-unavailable peer response should be final so the sender can notify its owner')
 assert(unavailableNotified?.conversation?.stopReason === 'skill-unavailable', 'receiver owner notification should preserve skill-unavailable status')
+
+// Test 4-tier token extraction in hermes
+const usage4Tier = extractHermesRuntimeUsage({
+  usage: {
+    input_tokens: 150,
+    output_tokens: 45,
+    prompt_tokens_details: {
+      cache_creation_input_tokens: 50,
+      cached_tokens: 80
+    }
+  }
+})
+assert(usage4Tier?.usageMode === 'four_tier', 'should extract 4-tier usage mode')
+assert(usage4Tier?.cacheCreationInputTokens === 50, 'should extract cache creation tokens')
+assert(usage4Tier?.cacheReadInputTokens === 80, 'should extract cache read tokens')
+
+// Test api_usage.sqlite and ownerNotifier bypass
+const testDir = path.join(os.tmpdir(), `a2-test-api-usage-${Date.now()}`)
+fs.mkdirSync(testDir, { recursive: true })
+try {
+  const store = createInboxStore({ inboxDir: testDir })
+  assert(fs.existsSync(path.join(testDir, 'api_usage.sqlite')), 'api_usage.sqlite should be created')
+  
+  // Test appendApiUsage
+  store.appendApiUsage({
+    id: 'test-inbound-id',
+    requestId: 'test-req-id',
+    caller: 'human:alice',
+    skill: 'openai-compatible-api',
+    inputTokens: 100,
+    outputTokens: 20,
+    cacheCreationInputTokens: 10,
+    cacheReadInputTokens: 30
+  })
+  
+  // Verify entry is written to SQLite
+  const sqlite = await import('node:sqlite')
+  const db = new sqlite.DatabaseSync(path.join(testDir, 'api_usage.sqlite'))
+  const row = db.prepare('SELECT * FROM api_usage_records WHERE request_id = ?').get('test-req-id')
+  assert(row !== undefined, 'api usage record should be inserted')
+  assert(row.caller === 'human:alice', 'caller should match')
+  assert(row.input_tokens === 100, 'input tokens should match')
+  assert(row.output_tokens === 20, 'output tokens should match')
+  assert(row.cache_creation_input_tokens === 10, 'cache creation tokens should match')
+  assert(row.cache_read_input_tokens === 30, 'cache read tokens should match')
+  assert(row.total_tokens === 120, 'total tokens should match')
+
+  // Test owner notification bypass for API calls
+  const { createOwnerNotifier } = await import('./lib/runtime/executor.mjs')
+  const notifier = createOwnerNotifier({
+    agentId: 'test-agent',
+    mode: 'host',
+    hostRuntime: 'hermes',
+    inbox: store
+  })
+  
+  const apiCallContext = {
+    selectedSkill: 'openai-compatible-api',
+    mailboxKey: 'test-mailbox-key',
+    item: {
+      inboundId: 'api-inbound-id-2',
+      remoteAgentId: 'alice',
+      request: {
+        id: 'api-req-id-2',
+        params: {
+          metadata: {
+            source: 'openai-compatible-api',
+            openaiRequestId: 'api-req-id-2'
+          }
+        }
+      }
+    },
+    ownerReport: {
+      final: true,
+      conversationKey: 'conv-key-2'
+    },
+    peerResponse: {
+      metadata: {
+        usage: {
+          inputTokens: 200,
+          outputTokens: 50,
+          cacheCreationInputTokens: 10,
+          cacheReadInputTokens: 40
+        }
+      }
+    }
+  }
+  
+  const notifyResult = await notifier(apiCallContext)
+  assert(notifyResult.delivered === true, 'should succeed')
+  assert(notifyResult.ownerDelivery?.status === 'skipped_api', 'should skip notification')
+  assert(notifyResult.ownerDelivery?.reason === 'api-call-notification-suppressed', 'should suppress notification')
+  
+  // Verify it appended to sqlite
+  const row2 = db.prepare('SELECT * FROM api_usage_records WHERE request_id = ?').get('api-req-id-2')
+  assert(row2 !== undefined, 'api usage record from notifier should be inserted')
+  assert(row2.input_tokens === 200, 'usage input tokens should match')
+  assert(row2.output_tokens === 50, 'usage output tokens should match')
+} finally {
+  try {
+    fs.rmSync(testDir, { recursive: true, force: true })
+  } catch {}
+}
 
 console.log('AgentSquared CLI self-test ok')

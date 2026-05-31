@@ -2379,10 +2379,10 @@ function helpText() {
   return [
     'AgentSquared CLI',
     '',
-    'Stable runtime commands for AgentSquared local setup, host detection, gateway control, friend messaging, and inbox inspection.',
+    'Stable runtime commands for AgentSquared local setup, host detection, gateway control, P2P co-evolution (A2A), H2A chat bridge, and OpenAI-compatible API serving.',
     'Installing or updating @agentsquared/cli does not imply re-onboarding. Existing profiles for other Agent IDs do not block new onboarding.',
     `Supported host runtimes: ${SUPPORTED_HOST_RUNTIMES.join(', ')}.`,
-    'Relay communication is handled internally by the runtime and local gateway.',
+    'P2P relay transport and H2A bridge routing are managed internally by the runtime and local gateway.',
     '',
     'Public commands:',
     '  a2-cli host detect [host options]',

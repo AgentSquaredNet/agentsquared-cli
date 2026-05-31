@@ -156,14 +156,30 @@ export function extractHermesRuntimeUsage(payload = null) {
   if (!Number.isFinite(input) || !Number.isFinite(output) || input < 0 || output < 0) {
     return null
   }
+  const cacheCreation = Number.parseInt(`${
+    usage?.cache_creation_input_tokens ?? 
+    usage?.cacheCreationInputTokens ?? 
+    usage?.prompt_tokens_details?.cache_creation_input_tokens ?? 
+    ''
+  }`, 10)
+  const cacheRead = Number.parseInt(`${
+    usage?.cache_read_input_tokens ?? 
+    usage?.cacheReadInputTokens ?? 
+    usage?.prompt_tokens_details?.cached_tokens ?? 
+    usage?.promptTokensDetails?.cachedTokens ?? 
+    ''
+  }`, 10)
+
+  const hasCache = Number.isFinite(cacheCreation) || Number.isFinite(cacheRead)
+
   return {
     runtime: 'hermes',
-    usageMode: 'two_tier',
+    usageMode: hasCache ? 'four_tier' : 'two_tier',
     accurate: true,
     inputTokens: input,
     outputTokens: output,
-    cacheCreationInputTokens: null,
-    cacheReadInputTokens: null
+    cacheCreationInputTokens: Number.isFinite(cacheCreation) ? cacheCreation : null,
+    cacheReadInputTokens: Number.isFinite(cacheRead) ? cacheRead : null
   }
 }
 
