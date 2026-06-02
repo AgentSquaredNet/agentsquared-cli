@@ -200,9 +200,13 @@ export function createCodexAdapter({
         senderSkillInventory: clean(metadata?.localSkillInventory)
       })
 
+      let lastTokenUsage = null
       const executionPromise = new Promise((resolve, reject) => {
         let text = ''
         const unsubscribe = client.onEvent((event) => {
+          if (event.method === 'thread/tokenUsage/updated') {
+            lastTokenUsage = event.params?.tokenUsage
+          }
           if (event.method === 'item/agentMessage/delta') {
             text += event.params?.delta || event.params?.contentDelta || ''
           }
@@ -213,14 +217,14 @@ export function createCodexAdapter({
               const err = new Error(event.params?.turn?.error?.message || 'Codex combined execution turn failed')
               reject(err)
             } else {
-              resolve(text)
+              resolve({ text, lastTokenUsage })
             }
           }
         })
       })
 
       await client.turnStart(threadId, prompt)
-      const resultText = await executionPromise
+      const { text: resultText, lastTokenUsage: finalTokenUsage } = await executionPromise
 
       const parsed = parseCodexCombinedResult(resultText, {
         defaultSkill: selectedSkill,
@@ -230,6 +234,29 @@ export function createCodexAdapter({
         defaultDecision,
         defaultStopReason
       })
+
+      if (finalTokenUsage) {
+        const last = finalTokenUsage.last || finalTokenUsage.total || {}
+        const usage = {
+          runtime: 'codex',
+          usageMode: 'four_tier',
+          accurate: true,
+          inputTokens: last.inputTokens ?? 0,
+          outputTokens: last.outputTokens ?? 0,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: last.cachedInputTokens ?? last.cacheReadInputTokens ?? 0
+        }
+        if (parsed.peerResponse) {
+          parsed.peerResponse.usage = usage
+          parsed.peerResponse.metadata = {
+            ...(parsed.peerResponse.metadata ?? {}),
+            usage
+          }
+        }
+        if (parsed.ownerReport) {
+          parsed.ownerReport.usage = usage
+        }
+      }
 
       return {
         parsed,
@@ -269,9 +296,13 @@ export function createCodexAdapter({
         conversationControl
       })
 
+      let lastTokenUsage = null
       const executionPromise = new Promise((resolve, reject) => {
         let text = ''
         const unsubscribe = client.onEvent((event) => {
+          if (event.method === 'thread/tokenUsage/updated') {
+            lastTokenUsage = event.params?.tokenUsage
+          }
           if (event.method === 'item/agentMessage/delta') {
             const delta = event.params?.delta || event.params?.contentDelta || ''
             text += delta
@@ -291,14 +322,28 @@ export function createCodexAdapter({
               const err = new Error(event.params?.turn?.error?.message || 'Codex H2A stream turn failed')
               reject(err)
             } else {
-              resolve(text)
+              resolve({ text, lastTokenUsage })
             }
           }
         })
       })
 
       await client.turnStart(threadId, prompt)
-      const replyText = await executionPromise
+      const { text: replyText, lastTokenUsage: finalTokenUsage } = await executionPromise
+
+      let usage = null
+      if (finalTokenUsage) {
+        const last = finalTokenUsage.last || finalTokenUsage.total || {}
+        usage = {
+          runtime: 'codex',
+          usageMode: 'four_tier',
+          accurate: true,
+          inputTokens: last.inputTokens ?? 0,
+          outputTokens: last.outputTokens ?? 0,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: last.cachedInputTokens ?? last.cacheReadInputTokens ?? 0
+        }
+      }
 
       return {
         parsed: {
@@ -315,8 +360,10 @@ export function createCodexAdapter({
               decision: defaultDecision,
               stopReason: defaultStopReason,
               final: defaultDecision === 'done',
-              finalize: defaultDecision === 'done'
-            }
+              finalize: defaultDecision === 'done',
+              ...(usage ? { usage } : {})
+            },
+            ...(usage ? { usage } : {})
           },
           ownerSummary: replyText
         },
