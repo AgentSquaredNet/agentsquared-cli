@@ -171,7 +171,7 @@ export class CodexClient {
     const hello = await this.#sendRequest('initialize', {
       clientInfo: {
         name: 'AgentSquaredCodexClient',
-        version: '1.6.14'
+        version: '1.6.15'
       },
       capabilities: {}
     }, handshakeTimeout)
