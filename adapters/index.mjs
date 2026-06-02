@@ -3,12 +3,14 @@ import { detectOpenClawHostEnvironment } from './openclaw/detect.mjs'
 import { createHermesAdapter } from './hermes/adapter.mjs'
 import { detectHermesHostEnvironment } from './hermes/detect.mjs'
 import { detectParentRuntimeHint } from './hermes/common.mjs'
+import { createCodexAdapter } from './codex/adapter.mjs'
+import { detectCodexHostEnvironment } from './codex/detect.mjs'
 
 function clean(value) {
   return `${value ?? ''}`.trim()
 }
 
-export const SUPPORTED_HOST_RUNTIMES = ['openclaw', 'hermes']
+export const SUPPORTED_HOST_RUNTIMES = ['codex', 'openclaw', 'hermes']
 
 function confidenceScore(confidence = '') {
   switch (clean(confidence).toLowerCase()) {
@@ -28,7 +30,7 @@ function detectionScore(detection = null) {
   if (!detection?.detected) {
     return base
   }
-  if (detection?.apiServerHealthy || detection?.rpcHealthy) {
+  if (detection?.apiServerHealthy || detection?.rpcHealthy || detection?.codexCommandAvailable) {
     return base + 3
   }
   if (detection?.gatewayServiceInstalled) {
@@ -40,9 +42,19 @@ function detectionScore(detection = null) {
 export async function detectHostRuntimeEnvironment({
   preferred = 'auto',
   openclaw = {},
-  hermes = {}
+  hermes = {},
+  codex = {}
 } = {}) {
   const normalizedPreferred = clean(preferred).toLowerCase() || 'auto'
+  if (normalizedPreferred === 'codex') {
+    const detection = await detectCodexHostEnvironment(codex)
+    return {
+      ...detection,
+      requested: 'codex',
+      resolved: detection?.detected ? 'codex' : 'none',
+      explicit: true
+    }
+  }
   if (normalizedPreferred === 'openclaw') {
     const detection = await detectOpenClawHostEnvironment(openclaw)
     return {
@@ -84,11 +96,13 @@ export async function detectHostRuntimeEnvironment({
   }
 
   const parentRuntimeHint = detectParentRuntimeHint()
-  const [openclawDetection, hermesDetection] = await Promise.all([
+  const [codexDetection, openclawDetection, hermesDetection] = await Promise.all([
+    detectCodexHostEnvironment(codex),
     detectOpenClawHostEnvironment(openclaw),
     detectHermesHostEnvironment(hermes)
   ])
   const candidates = [
+    { id: 'codex', detection: codexDetection },
     { id: 'openclaw', detection: openclawDetection },
     { id: 'hermes', detection: hermesDetection }
   ].filter((candidate) => candidate.detection?.detected)
@@ -102,6 +116,7 @@ export async function detectHostRuntimeEnvironment({
         resolved: hinted.id,
         parentRuntimeHint,
         candidates: {
+          codex: codexDetection,
           openclaw: openclawDetection,
           hermes: hermesDetection
         }
@@ -111,11 +126,12 @@ export async function detectHostRuntimeEnvironment({
 
   if (candidates.length === 0) {
     return {
-      ...openclawDetection,
+      ...codexDetection,
       requested: 'auto',
       resolved: 'none',
       parentRuntimeHint,
       candidates: {
+        codex: codexDetection,
         openclaw: openclawDetection,
         hermes: hermesDetection
       }
@@ -126,6 +142,12 @@ export async function detectHostRuntimeEnvironment({
     const scoreDelta = detectionScore(right.detection) - detectionScore(left.detection)
     if (scoreDelta !== 0) {
       return scoreDelta
+    }
+    if (left.id === 'codex') {
+      return -1
+    }
+    if (right.id === 'codex') {
+      return 1
     }
     if (left.id === 'openclaw') {
       return -1
@@ -139,6 +161,7 @@ export async function detectHostRuntimeEnvironment({
       resolved: winner.id,
       parentRuntimeHint,
       candidates: {
+        codex: codexDetection,
         openclaw: openclawDetection,
         hermes: hermesDetection
       }
@@ -153,6 +176,7 @@ export async function detectHostRuntimeEnvironment({
     reason: 'no-supported-host-runtime-detected',
     parentRuntimeHint,
     candidates: {
+      codex: codexDetection,
       openclaw: openclawDetection,
       hermes: hermesDetection
     }
@@ -163,9 +187,16 @@ export function createHostRuntimeAdapter({
   hostRuntime = 'none',
   localAgentId,
   openclaw = {},
-  hermes = {}
+  hermes = {},
+  codex = {}
 } = {}) {
   const normalizedHostRuntime = clean(hostRuntime).toLowerCase() || 'none'
+  if (normalizedHostRuntime === 'codex') {
+    return createCodexAdapter({
+      localAgentId,
+      ...codex
+    })
+  }
   if (normalizedHostRuntime === 'openclaw') {
     return createOpenClawAdapter({
       localAgentId,

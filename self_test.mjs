@@ -35,7 +35,7 @@ function assertCliSmoke(argv, expected, message) {
 }
 
 assertCliSmoke(['--help'], 'AgentSquared CLI', 'a2-cli --help should load the public CLI entrypoint')
-assertCliSmoke(['--version'], '1.6.13', 'a2-cli --version should print package version')
+assertCliSmoke(['--version'], '1.6.14', 'a2-cli --version should print package version')
 assert(typeof resolveHermesOwnerTarget === 'function', 'Hermes adapter should export owner-route resolver used by CLI')
 
 const multimodalInbound = {
@@ -528,6 +528,84 @@ try {
   try {
     fs.rmSync(testDir, { recursive: true, force: true })
   } catch {}
+}
+
+// Test Codex Adapter with a Mock sub-process
+const codexTestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-codex-test-'))
+try {
+  const fakeCodex = path.join(codexTestDir, 'fake-codex.mjs')
+  fs.writeFileSync(fakeCodex, [
+    '#!/usr/bin/env node',
+    'import readline from "node:readline";',
+    'const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: false });',
+    'function write(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }',
+    'rl.on("line", (line) => {',
+    '  const msg = JSON.parse(line);',
+    '  if (msg.method === "initialize") {',
+    '    write({ jsonrpc: "2.0", id: msg.id, result: { serverInfo: { name: "fake-codex" } } });',
+    '  } else if (msg.method === "thread/start") {',
+    '    write({ jsonrpc: "2.0", id: msg.id, result: { id: "mock_thread_id" } });',
+    '  } else if (msg.method === "thread/list") {',
+    '    write({ jsonrpc: "2.0", id: msg.id, result: [{ id: "mock_thread_id", name: "agentsquared:test_conv" }] });',
+    '  } else if (msg.method === "thread/name/set" || msg.method === "thread/resume") {',
+    '    write({ jsonrpc: "2.0", id: msg.id, result: {} });',
+    '  } else if (msg.method === "turn/start") {',
+    '    write({ jsonrpc: "2.0", id: msg.id, result: {} });',
+    '    // Send mock stream events',
+    '    write({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: "Codex " } });',
+    '    write({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: "success!" } });',
+    '    write({ jsonrpc: "2.0", method: "turn/completed", params: { turn: { status: "completed" } } });',
+    '  }',
+    '});'
+  ].join('\n'), 'utf8')
+  fs.chmodSync(fakeCodex, 0o755)
+
+  const { createCodexAdapter } = await import('./adapters/codex/adapter.mjs')
+  const adapter = createCodexAdapter({
+    localAgentId: 'helper@ExampleOwner',
+    codexPath: fakeCodex,
+    timeoutMs: 5000
+  })
+
+  // Verify preflight
+  const preflightResult = await adapter.preflight()
+  assert(preflightResult.ok === true, 'Codex preflight should pass with fake-codex')
+
+  // Verify executeInbound (runCombined)
+  const inboundItem = {
+    inboundId: 'inbound_test_1',
+    remoteAgentId: 'guide@ExampleUser',
+    request: {
+      id: 'req_1',
+      params: {
+        metadata: {
+          conversationKey: 'test_conv',
+          turnIndex: 1
+        },
+        message: {
+          parts: [{ kind: 'text', text: 'Hello Codex' }]
+        }
+      }
+    }
+  }
+
+  const result = await adapter.executeInbound({
+    item: inboundItem,
+    selectedSkill: 'agent-mutual-learning',
+    remoteAgentId: 'guide@ExampleUser',
+    conversationKey: 'test_conv',
+    conversationControl: { turnIndex: 1 },
+    conversationTranscript: '',
+    metadata: {},
+    defaultDecision: 'done',
+    defaultStopReason: 'completed',
+    inboundId: 'inbound_test_1'
+  })
+
+  assert(result.peerResponse?.message?.parts?.[0]?.text === 'Codex success!', 'Codex adapter should produce the correct combined output')
+  assert(result.peerResponse?.metadata?.turnIndex === 1, 'Codex adapter should preserve turn index')
+} finally {
+  fs.rmSync(codexTestDir, { recursive: true, force: true })
 }
 
 console.log('AgentSquared CLI self-test ok')
