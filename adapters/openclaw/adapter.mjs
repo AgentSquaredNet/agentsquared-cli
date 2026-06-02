@@ -472,9 +472,7 @@ export function createOpenClawAdapter({
         'agentsquared-work',
         localAgentId,
         remoteAgentId,
-        conversationKey,
-        item?.request?.params?.metadata?.turnIndex || '1',
-        item?.inboundId
+        conversationKey
       )
       const prompt = buildOpenClawCombinedPrompt({
         localAgentId,
@@ -551,9 +549,7 @@ export function createOpenClawAdapter({
       const sessionKey = stableId(
         'agentsquared-h2a-stream',
         localAgentId,
-        conversationKey,
-        item?.request?.params?.metadata?.turnIndex || '1',
-        item?.inboundId
+        conversationKey
       )
       const prompt = buildOpenClawH2AStreamPrompt({
         localAgentId,

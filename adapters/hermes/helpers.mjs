@@ -570,9 +570,11 @@ export function buildHermesTaskPrompt({
     `- platformMaxTurns: ${PLATFORM_MAX_TURNS}`,
     `- localSkillMaxTurns: ${localSkillMaxTurns}`,
     `- recommendedDecision: ${defaultShouldContinue ? 'continue' : 'done'}`,
-    clean(conversationTranscript)
-      ? `- currentConversationTranscript:\n${clean(conversationTranscript)}`
-      : '- currentConversationTranscript:\n(none yet for this live conversation)',
+    conversation.turnIndex > 1
+      ? ''
+      : clean(conversationTranscript)
+        ? `- currentConversationTranscript:\n${clean(conversationTranscript)}`
+        : '- currentConversationTranscript:\n(none yet for this live conversation)',
     clean(senderSkillInventory)
       ? `- senderSharedContext:\n${clean(senderSkillInventory)}`
       : '',
@@ -653,9 +655,11 @@ export function buildHermesCombinedPrompt({
     `- platformMaxTurns: ${PLATFORM_MAX_TURNS}`,
     `- localSkillMaxTurns: ${localSkillMaxTurns}`,
     `- recommendedDecision: ${defaultShouldContinue ? 'continue' : 'done'}`,
-    clean(conversationTranscript)
-      ? `- currentConversationTranscript:\n${clean(conversationTranscript)}`
-      : '- currentConversationTranscript:\n(none yet for this live conversation)',
+    conversation.turnIndex > 1
+      ? ''
+      : clean(conversationTranscript)
+        ? `- currentConversationTranscript:\n${clean(conversationTranscript)}`
+        : '- currentConversationTranscript:\n(none yet for this live conversation)',
     clean(senderSkillInventory)
       ? `- senderSharedContext:\n${clean(senderSkillInventory)}`
       : '',

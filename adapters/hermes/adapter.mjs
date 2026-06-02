@@ -95,7 +95,9 @@ function buildH2AStreamPrompt({
   conversationTranscript = ''
 } = {}) {
   const text = h2aInboundText(item)
-  const transcript = clean(conversationTranscript)
+  const metadata = item?.request?.params?.metadata ?? {}
+  const turnIndex = Number.parseInt(`${metadata?.turnIndex || 1}`, 10) || 1
+  const transcript = turnIndex > 1 ? '' : clean(conversationTranscript)
   const platformContext = buildInboundPlatformContext({
     localAgentId,
     remoteAgentId: clean(item?.remoteAgentId),
@@ -454,7 +456,7 @@ export function createHermesAdapter({
       inboundId
     }) => {
       const { detection, envVars } = runtimeContext
-      const hermesConversation = hermesConversationName('agentsquared:work', localAgentId, remoteAgentId, conversationKey, `${conversationControl.turnIndex}`)
+      const hermesConversation = hermesConversationName('agentsquared:work', localAgentId, remoteAgentId, conversationKey)
       const taskPayload = await postHermesResponse({
         apiBase: detection.apiBase,
         envVars,
@@ -500,7 +502,7 @@ export function createHermesAdapter({
       emitStreamEvent
     }) => {
       const { detection, envVars } = runtimeContext
-      const hermesConversation = hermesConversationName('agentsquared:h2a-stream', localAgentId, 'human', conversationKey, `${conversationControl.turnIndex}`)
+      const hermesConversation = hermesConversationName('agentsquared:h2a-stream', localAgentId, 'human', conversationKey)
       let streamedText = ''
       const payload = await postHermesResponseStream({
         apiBase: detection.apiBase,

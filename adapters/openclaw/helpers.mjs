@@ -886,15 +886,17 @@ export function buildOpenClawTaskPrompt({
     `- platformMaxTurns: ${PLATFORM_MAX_TURNS}`,
     `- localSkillMaxTurns: ${localSkillMaxTurns}`,
     `- recommendedDecision: ${defaultShouldContinue ? 'continue' : 'done'}`,
-    ...(clean(conversationTranscript)
-      ? [
-          '- currentConversationTranscript:',
-          clean(conversationTranscript)
-        ]
-      : [
-          '- currentConversationTranscript:',
-          '(none yet for this live conversation)'
-        ]),
+    ...(conversation.turnIndex > 1
+      ? []
+      : clean(conversationTranscript)
+        ? [
+            '- currentConversationTranscript:',
+            clean(conversationTranscript)
+          ]
+        : [
+            '- currentConversationTranscript:',
+            '(none yet for this live conversation)'
+          ]),
     ...(clean(senderSkillInventory)
       ? [
           '- senderSharedContext:',
@@ -1060,9 +1062,11 @@ export function buildOpenClawCombinedPrompt({
     `- platformMaxTurns: ${PLATFORM_MAX_TURNS}`,
     `- localSkillMaxTurns: ${localSkillMaxTurns}`,
     `- recommendedDecision: ${defaultShouldContinue ? 'continue' : 'done'}`,
-    clean(conversationTranscript)
-      ? `- currentConversationTranscript:\n${clean(conversationTranscript)}`
-      : '- currentConversationTranscript:\n(none yet for this live conversation)',
+    conversation.turnIndex > 1
+      ? ''
+      : clean(conversationTranscript)
+        ? `- currentConversationTranscript:\n${clean(conversationTranscript)}`
+        : '- currentConversationTranscript:\n(none yet for this live conversation)',
     clean(senderSkillInventory)
       ? `- senderSharedContext:\n${clean(senderSkillInventory)}`
       : '',
