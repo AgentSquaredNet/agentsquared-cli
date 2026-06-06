@@ -49,7 +49,7 @@ export function createCodexAdapter({
     const client = new CodexClient({ codexPath, timeoutMs })
     try {
       await client.connect()
-      const tempThread = await client.threadStart()
+      const tempThread = await client.threadStart({ ephemeral: true })
       const tempThreadId = tempThread?.id || tempThread?.threadId
 
       if (!tempThreadId) {
@@ -95,7 +95,17 @@ export function createCodexAdapter({
     }
   }
 
-  async function resolveOrCreateThread(client, conversationKey) {
+  async function resolveOrCreateThread(client, conversationKey, {
+    ephemeral = false
+  } = {}) {
+    if (ephemeral) {
+      const newThread = await client.threadStart({ ephemeral: true })
+      const threadId = newThread?.id || newThread?.threadId
+      if (!threadId) {
+        throw new Error('Failed to create new ephemeral Codex thread.')
+      }
+      return threadId
+    }
     const threadName = `agentsquared:${conversationKey}`
     let threadId = null
 
@@ -182,6 +192,7 @@ export function createCodexAdapter({
       inboundId
     }) => {
       const { client } = runtimeContext
+      const channelKind = clean(metadata?.channelKind).toLowerCase()
       
       if (hasInboundImages(item)) {
         const error = new Error('Codex adapter does not support image input yet.')
@@ -190,7 +201,9 @@ export function createCodexAdapter({
         throw error
       }
 
-      const threadId = await resolveOrCreateThread(client, conversationKey)
+      const threadId = await resolveOrCreateThread(client, conversationKey, {
+        ephemeral: channelKind === 'h2a' || channelKind === 'api'
+      })
       const prompt = buildCodexCombinedPrompt({
         localAgentId,
         remoteAgentId,
@@ -279,6 +292,7 @@ export function createCodexAdapter({
       emitStreamEvent
     }) => {
       const { client } = runtimeContext
+      const channelKind = clean(item?.request?.params?.metadata?.channelKind).toLowerCase()
 
       if (hasInboundImages(item)) {
         const error = new Error('Codex adapter does not support image input yet.')
@@ -287,7 +301,9 @@ export function createCodexAdapter({
         throw error
       }
 
-      const threadId = await resolveOrCreateThread(client, conversationKey)
+      const threadId = await resolveOrCreateThread(client, conversationKey, {
+        ephemeral: channelKind === 'h2a' || channelKind === 'api'
+      })
       const prompt = buildCodexH2AStreamPrompt({
         localAgentId,
         selectedSkill,
@@ -398,6 +414,17 @@ export function createCodexAdapter({
     }
   }
 
+  async function destroySession({
+    runtimeSessionId = ''
+  } = {}) {
+    return {
+      ok: true,
+      mode: 'codex',
+      runtimeSessionId: clean(runtimeSessionId),
+      reason: 'ephemeral-thread-released-on-client-close'
+    }
+  }
+
   return {
     id: 'codex',
     mode: 'codex',
@@ -405,6 +432,7 @@ export function createCodexAdapter({
     codexPath,
     preflight,
     executeInbound,
+    destroySession,
     pushOwnerReport,
     summarizeConversation
   }

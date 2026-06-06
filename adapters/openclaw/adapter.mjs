@@ -539,6 +539,7 @@ export function createOpenClawAdapter({
       conversationKey,
       conversationControl,
       conversationTranscript,
+      metadata,
       defaultDecision,
       defaultStopReason,
       inboundId,
@@ -546,8 +547,9 @@ export function createOpenClawAdapter({
     }) => {
       const { client, gatewayContext } = runtimeContext
       throwOpenClawMultimodalUnsupported(item)
+      const channelKind = clean(metadata?.channelKind).toLowerCase() === 'api' ? 'api' : 'h2a'
       const sessionKey = stableId(
-        'agentsquared-h2a-stream',
+        `agentsquared-${channelKind}-stream`,
         localAgentId,
         conversationKey
       )
@@ -562,8 +564,8 @@ export function createOpenClawAdapter({
         sessionKey,
         message: prompt,
         extraSystemPrompt: OPENCLAW_AGENT_SQUARED_NO_TOOLS_PROMPT,
-        idempotencyKey: `agentsquared-h2a-${inboundId || randomId('inbound')}`
-      }, timeoutMs, 'H2A stream agent request', { openclawAgent: agentName, localAgentId })
+        idempotencyKey: `agentsquared-${channelKind}-${inboundId || randomId('inbound')}`
+      }, timeoutMs, `${channelKind.toUpperCase()} stream agent request`, { openclawAgent: agentName, localAgentId })
       const runId = readOpenClawRunId(accepted)
       if (!runId) {
         throw new Error('OpenClaw H2A stream agent call did not return a runId.')
@@ -726,6 +728,33 @@ export function createOpenClawAdapter({
     }), { stage: 'OpenClaw owner report' })
   }
 
+  async function destroySession({
+    runtimeSessionId = ''
+  } = {}) {
+    const sessionKey = clean(runtimeSessionId)
+    if (!sessionKey) {
+      return { ok: false, mode: 'openclaw', reason: 'runtime-session-id-missing' }
+    }
+    return withOpenClawGatewayClient({
+      stateDir,
+      gatewayUrl,
+      gatewayToken,
+      gatewayPassword,
+      requestTimeoutMs: Math.min(timeoutMs, 30000)
+    }, async (client) => {
+      await requestOpenClaw(client, 'sessions.delete', {
+        key: sessionKey,
+        deleteTranscript: true
+      }, Math.min(timeoutMs, 30000), 'sessions delete', { openclawAgent: agentName, localAgentId })
+      return { ok: true, mode: 'openclaw', runtimeSessionId: sessionKey }
+    }).catch((error) => ({
+      ok: false,
+      mode: 'openclaw',
+      runtimeSessionId: sessionKey,
+      reason: clean(error?.message) || 'openclaw-session-delete-failed'
+    }))
+  }
+
   return {
     id: 'openclaw',
     mode: 'openclaw',
@@ -736,6 +765,7 @@ export function createOpenClawAdapter({
     gatewayUrl: clean(gatewayUrl),
     preflight,
     executeInbound,
+    destroySession,
     pushOwnerReport,
     summarizeConversation
   }

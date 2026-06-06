@@ -4,7 +4,7 @@ import { buildConversationSummaryPrompt, normalizeConversationSummary } from '..
 import { buildInboundPlatformContext } from '../../lib/conversation/platform_context.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import { createInboundAdapterPipeline, defaultInboundText, inboundImageParts } from '../../lib/runtime/adapter_pipeline.mjs'
-import { checkHermesApiServerHealth, extractHermesResponseText, extractHermesRuntimeUsage, postHermesResponse, postHermesResponseStream } from './api_client.mjs'
+import { checkHermesApiServerHealth, extractHermesResponseText, extractHermesRuntimeUsage, fetchHermesJson, postHermesResponse, postHermesResponseStream } from './api_client.mjs'
 import { buildHermesProcessEnv } from './common.mjs'
 import { detectHermesHostEnvironment } from './detect.mjs'
 import { readHermesEnv } from './env.mjs'
@@ -499,10 +499,12 @@ export function createHermesAdapter({
       defaultDecision,
       defaultStopReason,
       inboundId,
+      metadata,
       emitStreamEvent
     }) => {
       const { detection, envVars } = runtimeContext
-      const hermesConversation = hermesConversationName('agentsquared:h2a-stream', localAgentId, 'human', conversationKey)
+      const channelKind = clean(metadata?.channelKind).toLowerCase() === 'api' ? 'api' : 'h2a'
+      const hermesConversation = hermesConversationName(`agentsquared:${channelKind}-stream`, localAgentId, 'human', conversationKey)
       let streamedText = ''
       const payload = await postHermesResponseStream({
         apiBase: detection.apiBase,
@@ -607,6 +609,41 @@ export function createHermesAdapter({
     }, { stage: 'Hermes owner report' })
   }
 
+  async function destroySession({
+    runtimeSessionId = ''
+  } = {}) {
+    const sessionId = clean(runtimeSessionId)
+    if (!sessionId) {
+      return { ok: false, mode: 'hermes', reason: 'runtime-session-id-missing' }
+    }
+    try {
+      const detection = await detectCurrent()
+      const envVars = detection.envVars || readHermesEnv(detection.hermesHome || hermesHome)
+      const response = await fetchHermesJson(detection.apiBase || apiBase, `/api/sessions/${encodeURIComponent(sessionId)}`, {
+        method: 'DELETE',
+        apiKey: clean(envVars.API_SERVER_KEY),
+        timeoutMs: 10000
+      })
+      if (response.ok || response.status === 404) {
+        return { ok: true, mode: 'hermes', runtimeSessionId: sessionId, status: response.status }
+      }
+      return {
+        ok: false,
+        mode: 'hermes',
+        runtimeSessionId: sessionId,
+        status: response.status,
+        reason: response.status === 405 ? 'cleanup-unsupported' : 'hermes-session-delete-failed'
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        mode: 'hermes',
+        runtimeSessionId: sessionId,
+        reason: clean(error?.message) || 'cleanup-unsupported'
+      }
+    }
+  }
+
   return {
     id: 'hermes',
     mode: 'hermes',
@@ -616,6 +653,7 @@ export function createHermesAdapter({
     apiBase: clean(apiBase),
     preflight,
     executeInbound,
+    destroySession,
     pushOwnerReport,
     summarizeConversation
   }

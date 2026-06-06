@@ -34,8 +34,10 @@ function assertCliSmoke(argv, expected, message) {
   assert(`${result.stdout}`.includes(expected), `${message}: expected ${expected}`)
 }
 
+const packageJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'))
+
 assertCliSmoke(['--help'], 'AgentSquared CLI', 'a2-cli --help should load the public CLI entrypoint')
-assertCliSmoke(['--version'], '1.6.15', 'a2-cli --version should print package version')
+assertCliSmoke(['--version'], packageJson.version, 'a2-cli --version should print package version')
 assert(typeof resolveHermesOwnerTarget === 'function', 'Hermes adapter should export owner-route resolver used by CLI')
 
 const multimodalInbound = {

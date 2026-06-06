@@ -194,8 +194,12 @@ export class CodexClient {
     return this.#sendRequest('thread/list', { limit })
   }
 
-  async threadStart() {
-    return this.#sendRequest('thread/start', {})
+  async threadStart(options = {}) {
+    const params = {}
+    if (options?.ephemeral === true) {
+      params.ephemeral = true
+    }
+    return this.#sendRequest('thread/start', params)
   }
 
   async threadResume(threadId) {
