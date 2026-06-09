@@ -1,6 +1,6 @@
 {
   "name": "@agentsquared/cli",
-  "version": "1.6.16",
+  "version": "1.6.17",
   "description": "Official AgentSquared CLI runtime for onboarding, gateway control, P2P relay, H2A bridge, and OpenAI-compatible API serving.",
   "license": "MIT",
   "type": "module",

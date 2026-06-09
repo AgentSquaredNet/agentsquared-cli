@@ -33,10 +33,12 @@ export async function fetchHermesJson(apiBase, pathname, {
     } catch {
       payload = text
     }
+    const sessionId = response.headers.get('x-hermes-session-id') || response.headers.get('X-Hermes-Session-Id') || ''
     return {
       ok: response.ok,
       status: response.status,
-      payload
+      payload,
+      sessionId
     }
   } finally {
     clearTimeout(timeout)
@@ -94,6 +96,7 @@ export async function fetchHermesSse(apiBase, pathname, {
       body: body == null ? undefined : JSON.stringify(body),
       signal: controller.signal
     })
+    const sessionId = response.headers.get('x-hermes-session-id') || response.headers.get('X-Hermes-Session-Id') || ''
     if (!response.ok) {
       const text = await response.text()
       let payload = text
@@ -102,7 +105,7 @@ export async function fetchHermesSse(apiBase, pathname, {
       } catch {
         // keep raw text
       }
-      return { ok: false, status: response.status, payload }
+      return { ok: false, status: response.status, payload, sessionId }
     }
     if (!response.body?.getReader) {
       throw new Error('Hermes API server did not return a readable SSE body.')
@@ -132,7 +135,7 @@ export async function fetchHermesSse(apiBase, pathname, {
     if (tail) {
       await onEvent?.(parseSseFrame(tail))
     }
-    return { ok: true, status: response.status }
+    return { ok: true, status: response.status, sessionId }
   } finally {
     clearTimeout(timeout)
   }
@@ -148,9 +151,19 @@ export function extractHermesResponseText(payload = null) {
 }
 
 export function extractHermesRuntimeUsage(payload = null) {
-  const usage = payload?.usage
-    ?? payload?.response?.usage
-    ?? payload?.metadata?.usage
+  if (payload == null) {
+    return null
+  }
+  const session = payload.session ?? (payload.object === 'hermes.session' ? payload : null)
+  const usage = session
+    ? {
+        input_tokens: session.input_tokens ?? session.inputTokens,
+        output_tokens: session.output_tokens ?? session.outputTokens,
+        cache_creation_input_tokens: session.cache_write_tokens ?? session.cacheWriteTokens,
+        cache_read_input_tokens: session.cache_read_tokens ?? session.cacheReadTokens
+      }
+    : (payload?.usage ?? payload?.response?.usage ?? payload?.metadata?.usage)
+
   const input = Number.parseInt(`${usage?.input_tokens ?? usage?.inputTokens ?? ''}`, 10)
   const output = Number.parseInt(`${usage?.output_tokens ?? usage?.outputTokens ?? ''}`, 10)
   if (!Number.isFinite(input) || !Number.isFinite(output) || input < 0 || output < 0) {
@@ -271,7 +284,8 @@ export async function postHermesResponse({
   instructions = '',
   conversation = '',
   timeoutMs = 180000,
-  store = false
+  store = false,
+  onSessionId = null
 } = {}) {
   const resolvedBase = buildHermesApiBase({ apiBase, envVars })
   const response = await fetchHermesJson(resolvedBase, '/v1/responses', {
@@ -288,6 +302,9 @@ export async function postHermesResponse({
       store: Boolean(store)
     }
   })
+  if (response.sessionId && typeof onSessionId === 'function') {
+    onSessionId(response.sessionId)
+  }
   if (!response.ok) {
     const detail = clean(response?.payload?.error?.message || response?.payload?.message || response?.payload)
     throw new Error(detail || `Hermes API server request failed with status ${response.status}`)
@@ -310,7 +327,8 @@ export async function postHermesResponseStream({
   conversation = '',
   timeoutMs = 180000,
   store = false,
-  onTextDelta = null
+  onTextDelta = null,
+  onSessionId = null
 } = {}) {
   const resolvedBase = buildHermesApiBase({ apiBase, envVars })
   let completedPayload = null
@@ -346,6 +364,9 @@ export async function postHermesResponseStream({
       }
     }
   })
+  if (response.sessionId && typeof onSessionId === 'function') {
+    onSessionId(response.sessionId)
+  }
   if (!response.ok) {
     const detail = clean(response?.payload?.error?.message || response?.payload?.message || response?.payload)
     throw new Error(detail || `Hermes API server stream request failed with status ${response.status}`)
@@ -363,4 +384,17 @@ export async function postHermesResponseStream({
       content: [{ type: 'output_text', text: accumulatedText }]
     }]
   }
+}
+
+export async function getHermesSessionInfo(apiBase, envVars, sessionId) {
+  const resolvedBase = buildHermesApiBase({ apiBase, envVars })
+  const response = await fetchHermesJson(resolvedBase, `/api/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'GET',
+    apiKey: clean(envVars.API_SERVER_KEY),
+    timeoutMs: 10000
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to fetch Hermes session info: ${response.status} ${clean(response.payload?.error?.message || response.payload)}`)
+  }
+  return response.payload
 }

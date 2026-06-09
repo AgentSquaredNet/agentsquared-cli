@@ -4,7 +4,7 @@ import { buildConversationSummaryPrompt, normalizeConversationSummary } from '..
 import { buildInboundPlatformContext } from '../../lib/conversation/platform_context.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import { createInboundAdapterPipeline, defaultInboundText, inboundImageParts } from '../../lib/runtime/adapter_pipeline.mjs'
-import { checkHermesApiServerHealth, extractHermesResponseText, extractHermesRuntimeUsage, fetchHermesJson, postHermesResponse, postHermesResponseStream } from './api_client.mjs'
+import { checkHermesApiServerHealth, extractHermesResponseText, extractHermesRuntimeUsage, fetchHermesJson, postHermesResponse, postHermesResponseStream, getHermesSessionInfo } from './api_client.mjs'
 import { buildHermesProcessEnv } from './common.mjs'
 import { detectHermesHostEnvironment } from './detect.mjs'
 import { readHermesEnv } from './env.mjs'
@@ -457,6 +457,7 @@ export function createHermesAdapter({
     }) => {
       const { detection, envVars } = runtimeContext
       const hermesConversation = hermesConversationName('agentsquared:work', localAgentId, remoteAgentId, conversationKey)
+      let sessionId = ''
       const taskPayload = await postHermesResponse({
         apiBase: detection.apiBase,
         envVars,
@@ -470,7 +471,8 @@ export function createHermesAdapter({
           item,
           conversationTranscript,
           senderSkillInventory: clean(metadata?.localSkillInventory)
-        })
+        }),
+        onSessionId: (id) => { sessionId = id }
       })
       const parsed = parseHermesCombinedResult(taskPayload, {
         defaultSkill: selectedSkill,
@@ -480,12 +482,25 @@ export function createHermesAdapter({
         defaultDecision,
         defaultStopReason
       })
+      let usage = null
+      if (sessionId) {
+        try {
+          const sessionInfo = await getHermesSessionInfo(detection.apiBase, envVars, sessionId)
+          usage = extractHermesRuntimeUsage(sessionInfo)
+        } catch (err) {
+          console.warn(`Failed to fetch session usage via bypass API: ${err.message}. Fallback to direct payload usage.`)
+          usage = extractHermesRuntimeUsage(taskPayload)
+        }
+      } else {
+        usage = extractHermesRuntimeUsage(taskPayload)
+      }
       return {
         parsed,
         runtimeMetadata: {
           hermesConversation,
           hermesApiBase: detection.apiBase,
-          usage: extractHermesRuntimeUsage(taskPayload)
+          runtimeSessionId: sessionId,
+          usage
         }
       }
     },
@@ -506,6 +521,7 @@ export function createHermesAdapter({
       const channelKind = clean(metadata?.channelKind).toLowerCase() === 'api' ? 'api' : 'h2a'
       const hermesConversation = hermesConversationName(`agentsquared:${channelKind}-stream`, localAgentId, 'human', conversationKey)
       let streamedText = ''
+      let sessionId = ''
       const payload = await postHermesResponseStream({
         apiBase: detection.apiBase,
         envVars,
@@ -519,10 +535,22 @@ export function createHermesAdapter({
         onTextDelta: (delta) => {
           streamedText += `${delta ?? ''}`
           return emitTextDelta(emitStreamEvent, { delta, source: 'hermes' })
-        }
+        },
+        onSessionId: (id) => { sessionId = id }
       })
       const replyText = scrubOutboundText(extractHermesResponseText(payload))
-      const usage = extractHermesRuntimeUsage(payload)
+      let usage = null
+      if (sessionId) {
+        try {
+          const sessionInfo = await getHermesSessionInfo(detection.apiBase, envVars, sessionId)
+          usage = extractHermesRuntimeUsage(sessionInfo)
+        } catch (err) {
+          console.warn(`Failed to fetch stream session usage via bypass API: ${err.message}. Fallback to direct payload usage.`)
+          usage = extractHermesRuntimeUsage(payload)
+        }
+      } else {
+        usage = extractHermesRuntimeUsage(payload)
+      }
       if (!streamedText && replyText) {
         await emitTextDelta(emitStreamEvent, { delta: replyText, source: 'hermes' })
       } else if (streamedText && replyText.startsWith(streamedText) && replyText.length > streamedText.length) {
@@ -552,6 +580,7 @@ export function createHermesAdapter({
         runtimeMetadata: {
           hermesConversation,
           hermesApiBase: detection.apiBase,
+          runtimeSessionId: sessionId,
           stream: true,
           inboundId,
           usage
