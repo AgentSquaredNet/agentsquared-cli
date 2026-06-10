@@ -15,6 +15,7 @@ import { createInboxStore } from './lib/gateway/inbox.mjs'
 import { discoverLocalAgentProfiles } from './lib/gateway/lifecycle.mjs'
 import { buildEd25519Bundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
 import { defaultInboundText, hasInboundImages, inboundImageParts } from './lib/runtime/adapter_pipeline.mjs'
+import { resolveEphemeralRuntimeSessionId } from './lib/runtime/executor.mjs'
 import { createAgentRouter } from './lib/routing/agent_router.mjs'
 import { agentSquaredAgentIdForWire, normalizeAgentSquaredAgentId, parseAgentSquaredAgentId } from './lib/shared/agent_id.mjs'
 import { defaultGatewayStateFile, defaultPeerKeyFile, defaultRuntimeKeyFile } from './lib/shared/paths.mjs'
@@ -62,6 +63,21 @@ assert(hermesInput[0].content[1].type === 'input_image' && hermesInput[0].conten
 assert(hermesInput[0].content[2].image_url.startsWith('data:image/jpeg;base64,'), 'Hermes H2A input builder should convert base64 images to data URLs')
 const hermesUsage = extractHermesRuntimeUsage({ usage: { input_tokens: 120, output_tokens: 34, total_tokens: 154 } })
 assert(hermesUsage?.runtime === 'hermes' && hermesUsage?.usageMode === 'two_tier' && hermesUsage?.inputTokens === 120 && hermesUsage?.outputTokens === 34, 'Hermes usage extraction should emit accurate two-tier runtime usage')
+const hermesSessionUsage = extractHermesRuntimeUsage({
+  id: 'session_123',
+  input_tokens: 120,
+  output_tokens: 34,
+  cache_write_tokens: 0,
+  cache_read_tokens: 0
+})
+assert(hermesSessionUsage?.runtime === 'hermes' && hermesSessionUsage?.usageMode === 'four_tier', 'Hermes session detail usage should emit four-tier mode even when cache counts are zero')
+assert(hermesSessionUsage?.cacheCreationInputTokens === 0 && hermesSessionUsage?.cacheReadInputTokens === 0, 'Hermes session detail usage should preserve zero cache token counts')
+assert(resolveEphemeralRuntimeSessionId({
+  runtimeSessionId: 'hermes-session-real',
+  hermesConversation: 'agentsquared:api-stream:conversation-name'
+}, {
+  conversationKey: 'api_fallback'
+}) === 'hermes-session-real', 'ephemeral cleanup should prefer runtimeSessionId over Hermes conversation name')
 
 assert(normalizeAgentSquaredAgentId('A2:Helper@ExampleOwner') === 'helper@exampleowner', 'A2-prefixed AgentSquared ID should provide a lowercase comparison key')
 assert(normalizeAgentSquaredAgentId('helper@ExampleOwner') === 'helper@exampleowner', 'bare AgentSquared ID should provide a lowercase comparison key')

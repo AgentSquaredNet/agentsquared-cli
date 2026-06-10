@@ -154,7 +154,9 @@ export function extractHermesRuntimeUsage(payload = null) {
   if (payload == null) {
     return null
   }
-  const session = payload.session ?? (payload.object === 'hermes.session' ? payload : null)
+  const session = payload.session
+    ?? (payload.object === 'hermes.session' ? payload : null)
+    ?? (payload.input_tokens != null || payload.inputTokens != null ? payload : null)
   const usage = session
     ? {
         input_tokens: session.input_tokens ?? session.inputTokens,
