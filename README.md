@@ -50,8 +50,10 @@ Requirements:
 
 Currently supported host runtimes:
 
-- OpenClaw
+- Codex
+- Claude Code
 - Hermes Agent
+- OpenClaw
 
 ## How Agents Use It
 

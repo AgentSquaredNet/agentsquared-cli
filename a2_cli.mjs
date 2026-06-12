@@ -204,6 +204,14 @@ function buildCliHostOptions(args = {}) {
   const hermesProfile = clean(args['hermes-profile'])
   const hermesApiBase = clean(args['hermes-api-base'])
   const hermesTimeoutMs = Math.max(1000, Number.parseInt(args['hermes-timeout-ms'] ?? `${process.env.HERMES_TIMEOUT_MS ?? '180000'}`, 10) || 180000)
+  const codexCommand = clean(args['codex-command'] || process.env.CODEX_COMMAND)
+  const codexTimeoutMs = Math.max(1000, Number.parseInt(args['codex-timeout-ms'] ?? `${process.env.CODEX_TIMEOUT_MS ?? '180000'}`, 10) || 180000)
+  const claudeCommand = clean(args['claude-command'] || process.env.CLAUDE_COMMAND) || 'claude'
+  const claudeCwd = clean(args['claude-cwd'] || process.env.CLAUDE_CWD)
+  const claudeModel = clean(args['claude-model'] || process.env.CLAUDE_MODEL)
+  const claudeTimeoutMs = Math.max(1000, Number.parseInt(args['claude-timeout-ms'] ?? `${process.env.CLAUDE_TIMEOUT_MS ?? '180000'}`, 10) || 180000)
+  const claudeMaxTurns = Math.max(1, Number.parseInt(args['claude-max-turns'] ?? `${process.env.CLAUDE_MAX_TURNS ?? '3'}`, 10) || 3)
+  const claudeSettingSources = clean(args['claude-setting-sources'] || process.env.CLAUDE_SETTING_SOURCES) || 'none'
   return {
     preferredHostRuntime,
     openclaw: {
@@ -223,6 +231,18 @@ function buildCliHostOptions(args = {}) {
       hermesProfile,
       apiBase: hermesApiBase,
       timeoutMs: hermesTimeoutMs
+    },
+    codex: {
+      command: codexCommand,
+      timeoutMs: codexTimeoutMs
+    },
+    claudecode: {
+      command: claudeCommand,
+      cwd: claudeCwd,
+      model: claudeModel,
+      timeoutMs: claudeTimeoutMs,
+      maxTurns: claudeMaxTurns,
+      settingSources: claudeSettingSources
     }
   }
 }
@@ -243,6 +263,12 @@ function hostRuntimeReady(detectedHostRuntime = null) {
   if (resolved === 'hermes') {
     return Boolean(detectedHostRuntime?.apiServerHealthy)
   }
+  if (resolved === 'codex') {
+    return Boolean(detectedHostRuntime?.codexCommandAvailable)
+  }
+  if (resolved === 'claudecode') {
+    return Boolean(detectedHostRuntime?.authHealthy)
+  }
   return false
 }
 
@@ -259,6 +285,13 @@ function summarizeHostRuntimeForOutput(detectedHostRuntime = null) {
     resolved: clean(detectedHostRuntime.resolved || detectedHostRuntime.id),
     suggested: clean(detectedHostRuntime.suggested),
     workspaceDir: clean(detectedHostRuntime.workspaceDir),
+    codexPath: clean(detectedHostRuntime.codexPath),
+    codexCommandAvailable: typeof detectedHostRuntime.codexCommandAvailable === 'boolean' ? detectedHostRuntime.codexCommandAvailable : undefined,
+    claudeCommand: clean(detectedHostRuntime.claudeCommand),
+    claudeVersion: clean(detectedHostRuntime.claudeVersion),
+    authHealthy: typeof detectedHostRuntime.authHealthy === 'boolean' ? detectedHostRuntime.authHealthy : undefined,
+    authHint: clean(detectedHostRuntime.authHint),
+    authMethod: clean(detectedHostRuntime.authStatus?.authMethod),
     apiBase: clean(detectedHostRuntime.apiBase),
     apiServerHealthy: typeof detectedHostRuntime.apiServerHealthy === 'boolean' ? detectedHostRuntime.apiServerHealthy : undefined,
     gatewayServiceInstalled: typeof detectedHostRuntime.gatewayServiceInstalled === 'boolean' ? detectedHostRuntime.gatewayServiceInstalled : undefined,
@@ -321,6 +354,8 @@ function buildGatewayHealthGuidance({
   } else if (!hostCoordination?.detectedReady) {
     if (clean(detectedHostRuntime?.resolved) === 'hermes') {
       guidance.push('Hermes is installed but not ready yet. Ensure Hermes gateway is running and the API server is healthy, then retry.')
+    } else if (clean(detectedHostRuntime?.resolved) === 'claudecode') {
+      guidance.push('Claude Code is installed but not authenticated yet. Run `claude auth login` or `claude auth status`, then retry.')
     } else if (clean(detectedHostRuntime?.resolved) === 'openclaw') {
       guidance.push('OpenClaw is installed but not ready yet. Ensure the OpenClaw gateway is running and reachable, then retry.')
     }
@@ -427,6 +462,18 @@ async function pushCliOwnerReport({
         hermesProfile: hostContext.hermesProfile,
         apiBase: hostContext.hermesApiBase,
         timeoutMs: hostContext.hermesTimeoutMs
+      },
+      codex: {
+        codexPath: hostContext.codexCommand,
+        timeoutMs: hostContext.codexTimeoutMs
+      },
+      claudecode: {
+        claudeCommand: hostContext.claudeCommand,
+        cwd: hostContext.claudeCwd,
+        model: hostContext.claudeModel,
+        timeoutMs: hostContext.claudeTimeoutMs,
+        maxTurns: hostContext.claudeMaxTurns,
+        settingSources: hostContext.claudeSettingSources
       }
     })
     if (!hostAdapter?.pushOwnerReport) {
@@ -590,7 +637,9 @@ async function resolveCliHostContext({
   const detectedHostRuntime = await detectHostRuntimeEnvironment({
     preferred: hostOptions.preferredHostRuntime,
     openclaw: hostOptions.openclaw,
-    hermes: hostOptions.hermes
+    hermes: hostOptions.hermes,
+    codex: hostOptions.codex,
+    claudecode: hostOptions.claudecode
   })
   const resolvedHostRuntime = detectedHostRuntime.resolved || 'none'
   if (!detectedHostRuntime.detected || !SUPPORTED_HOST_RUNTIMES.includes(resolvedHostRuntime)) {
@@ -623,6 +672,14 @@ async function resolveCliHostContext({
     hermesProfile: clean(detectedHostRuntime.hermesProfile) || hostOptions.hermes.hermesProfile,
     hermesApiBase: clean(detectedHostRuntime.apiBase) || hostOptions.hermes.apiBase,
     hermesTimeoutMs: hostOptions.hermes.timeoutMs,
+    codexCommand: clean(detectedHostRuntime.codexPath) || hostOptions.codex.command,
+    codexTimeoutMs: hostOptions.codex.timeoutMs,
+    claudeCommand: clean(detectedHostRuntime.claudeCommand) || hostOptions.claudecode.command,
+    claudeCwd: hostOptions.claudecode.cwd,
+    claudeModel: hostOptions.claudecode.model,
+    claudeTimeoutMs: hostOptions.claudecode.timeoutMs,
+    claudeMaxTurns: hostOptions.claudecode.maxTurns,
+    claudeSettingSources: hostOptions.claudecode.settingSources,
     agentId
   }
 }
@@ -657,7 +714,15 @@ async function createCliLocalRuntimeExecutor({
     hermesHome: hostContext.hermesHome,
     hermesProfile: hostContext.hermesProfile,
     hermesApiBase: hostContext.hermesApiBase,
-    hermesTimeoutMs: hostContext.hermesTimeoutMs
+    hermesTimeoutMs: hostContext.hermesTimeoutMs,
+    codexCommand: hostContext.codexCommand,
+    codexTimeoutMs: hostContext.codexTimeoutMs,
+    claudeCommand: hostContext.claudeCommand,
+    claudeCwd: hostContext.claudeCwd,
+    claudeModel: hostContext.claudeModel,
+    claudeTimeoutMs: hostContext.claudeTimeoutMs,
+    claudeMaxTurns: hostContext.claudeMaxTurns,
+    claudeSettingSources: hostContext.claudeSettingSources
   })
 }
 
@@ -891,15 +956,17 @@ function describeDetectedHostRuntime(detectedHostRuntime = null) {
 }
 
 function assertSupportedActivationHostRuntime(detectedHostRuntime = null) {
-  if (Boolean(detectedHostRuntime?.detected) && SUPPORTED_HOST_RUNTIMES.includes(clean(detectedHostRuntime?.resolved))) {
+  if (Boolean(detectedHostRuntime?.detected) && SUPPORTED_HOST_RUNTIMES.includes(clean(detectedHostRuntime?.resolved)) && hostRuntimeReady(detectedHostRuntime)) {
     return
   }
   const detected = describeDetectedHostRuntime(detectedHostRuntime)
   const reason = clean(detectedHostRuntime?.reason)
+  const authHint = clean(detectedHostRuntime?.authHint)
   const suggested = clean(detectedHostRuntime?.suggested) || defaultSuggestedHostRuntime()
   const detail = reason ? ` Detection reason: ${reason}.` : ''
+  const hint = authHint ? ` ${authHint}` : ''
   throw new Error(
-    `AgentSquared activation requires a supported host runtime (${defaultSuggestedHostRuntime()}). Detected host runtime: ${detected}.${detail} Finish installing/configuring a supported host runtime first, then retry onboarding. Suggested host runtime: ${suggested}.`
+    `AgentSquared activation requires a supported and ready host runtime (${defaultSuggestedHostRuntime()}). Detected host runtime: ${detected}.${detail}${hint} Finish installing/configuring a supported host runtime first, then retry onboarding. Suggested host runtime: ${suggested}.`
   )
 }
 
@@ -1122,6 +1189,34 @@ function describeErrorForOutput(error = null, seen = new Set()) {
   return [...new Set(parts)].join('; ')
 }
 
+function describeApiErrorPayload(payload = null, fallback = '') {
+  if (payload == null) {
+    return clean(fallback)
+  }
+  if (typeof payload !== 'object') {
+    return clean(payload) || clean(fallback)
+  }
+  const direct = [
+    payload.message,
+    payload.error,
+    payload.detail,
+    payload.reason,
+    payload.code
+  ]
+  for (const value of direct) {
+    const detail = describeErrorForOutput(value)
+    if (detail) {
+      return detail
+    }
+  }
+  try {
+    const encoded = JSON.stringify(payload)
+    return clean(encoded) || clean(fallback)
+  } catch {
+    return clean(fallback)
+  }
+}
+
 function agentScopeDirForKeyFile(keyFile) {
   return path.dirname(path.dirname(resolveUserPath(keyFile)))
 }
@@ -1189,7 +1284,8 @@ async function registerAgent(args) {
   })
   const payload = await response.json()
   if (!response.ok) {
-    throw new Error(`${payload?.message || payload?.error || `Agent registration failed with status ${response.status}`} Pending runtime key was left outside the active profile at ${pendingKeyFile}.`)
+    const detail = describeApiErrorPayload(payload, `Agent registration failed with status ${response.status}`)
+    throw new Error(`${detail} Pending runtime key was left outside the active profile at ${pendingKeyFile}.`)
   }
   const result = payload?.value ?? payload
   const fullName = clean(result.fullName) || `${agentName}@unknown`
@@ -1224,7 +1320,9 @@ async function commandOnboard(args) {
   const detectedHostRuntime = await detectHostRuntimeEnvironment({
     preferred: hostOptions.preferredHostRuntime,
     openclaw: hostOptions.openclaw,
-    hermes: hostOptions.hermes
+    hermes: hostOptions.hermes,
+    codex: hostOptions.codex,
+    claudecode: hostOptions.claudecode
   })
   assertSupportedActivationHostRuntime(detectedHostRuntime)
   const targetAgentId = onboardingTokenTargetAgentId(authorizationToken)
@@ -1603,7 +1701,9 @@ async function commandGatewayHealth(args) {
   const detectedHostRuntime = await detectHostRuntimeEnvironment({
     preferred: hostOptions.preferredHostRuntime,
     openclaw: hostOptions.openclaw,
-    hermes: hostOptions.hermes
+    hermes: hostOptions.hermes,
+    codex: hostOptions.codex,
+    claudecode: hostOptions.claudecode
   })
 
   let context = null
@@ -1703,7 +1803,9 @@ async function commandGatewayDoctor(args) {
   const detectedHostRuntime = await detectHostRuntimeEnvironment({
     preferred: hostOptions.preferredHostRuntime,
     openclaw: hostOptions.openclaw,
-    hermes: hostOptions.hermes
+    hermes: hostOptions.hermes,
+    codex: hostOptions.codex,
+    claudecode: hostOptions.claudecode
   })
   applyProcessEnvForArgs(args, detectedHostRuntime)
   printJson(await runGatewayDoctor({
@@ -1741,7 +1843,9 @@ async function commandUpdate(args, rawArgs) {
   const detectedHostRuntime = await detectHostRuntimeEnvironment({
     preferred: hostOptions.preferredHostRuntime,
     openclaw: hostOptions.openclaw,
-    hermes: hostOptions.hermes
+    hermes: hostOptions.hermes,
+    codex: hostOptions.codex,
+    claudecode: hostOptions.claudecode
   })
   applyProcessEnvForArgs(args, detectedHostRuntime)
   const doctor = await runGatewayDoctor({
@@ -2370,7 +2474,9 @@ async function commandHostDetect(args) {
   const detectedHostRuntime = await detectHostRuntimeEnvironment({
     preferred: hostOptions.preferredHostRuntime,
     openclaw: hostOptions.openclaw,
-    hermes: hostOptions.hermes
+    hermes: hostOptions.hermes,
+    codex: hostOptions.codex,
+    claudecode: hostOptions.claudecode
   })
   printJson(summarizeHostRuntimeForOutput(detectedHostRuntime))
 }
@@ -2400,7 +2506,9 @@ function helpText() {
     '  a2-cli conversation show --conversation-id <id> --agent-id <id> --key-file <file> [--no-notify true]',
     '',
     'Host options (runtime-specific, optional):',
-    '  --host-runtime <auto|openclaw|hermes>',
+    '  --host-runtime <auto|codex|claudecode|hermes|openclaw>',
+    '  Codex: --codex-command --codex-timeout-ms --codex-smoke-timeout-ms',
+    '  Claude Code: --claude-command --claude-cwd --claude-model --claude-timeout-ms --claude-max-turns --claude-setting-sources',
     '  OpenClaw: --openclaw-agent --openclaw-command --openclaw-cwd --openclaw-gateway-url --openclaw-gateway-token --openclaw-gateway-password',
     '  Hermes: --hermes-command --hermes-home --hermes-profile --hermes-api-base',
     '  Friend messaging: --friend-msg-wait-ms <ms> (default: 50000 for one-turn workflows; multi-turn workflows are normally handed to the local gateway job runner; use --friend-msg-sync true only for debugging foreground execution)',

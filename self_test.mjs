@@ -12,13 +12,18 @@ import { findLocalOfficialSkill, findOfficialSkillsRoot } from './lib/conversati
 import { normalizeConversationControl } from './lib/conversation/policy.mjs'
 import { buildReceiverBaseReport, buildSenderBaseReport, renderConversationDetails } from './lib/conversation/templates.mjs'
 import { createInboxStore } from './lib/gateway/inbox.mjs'
-import { discoverLocalAgentProfiles } from './lib/gateway/lifecycle.mjs'
+import { buildGatewayArgs, discoverLocalAgentProfiles } from './lib/gateway/lifecycle.mjs'
 import { buildEd25519Bundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
 import { defaultInboundText, hasInboundImages, inboundImageParts } from './lib/runtime/adapter_pipeline.mjs'
 import { resolveEphemeralRuntimeSessionId } from './lib/runtime/executor.mjs'
 import { createAgentRouter } from './lib/routing/agent_router.mjs'
 import { agentSquaredAgentIdForWire, normalizeAgentSquaredAgentId, parseAgentSquaredAgentId } from './lib/shared/agent_id.mjs'
 import { defaultGatewayStateFile, defaultPeerKeyFile, defaultRuntimeKeyFile } from './lib/shared/paths.mjs'
+import { SUPPORTED_HOST_RUNTIMES } from './adapters/index.mjs'
+import { CodexClient, resolveCodexThreadId } from './adapters/codex/client.mjs'
+import { detectClaudeCodeHostEnvironment } from './adapters/claudecode/detect.mjs'
+import { buildClaudeCodeSafeOptions, CLAUDE_CODE_DENIED_TOOLS } from './adapters/claudecode/client.mjs'
+import { parseClaudeCodeCombinedResult } from './adapters/claudecode/helpers.mjs'
 
 function assert(condition, message) {
   if (!condition) {
@@ -40,6 +45,18 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package
 assertCliSmoke(['--help'], 'AgentSquared CLI', 'a2-cli --help should load the public CLI entrypoint')
 assertCliSmoke(['--version'], packageJson.version, 'a2-cli --version should print package version')
 assert(typeof resolveHermesOwnerTarget === 'function', 'Hermes adapter should export owner-route resolver used by CLI')
+assert(SUPPORTED_HOST_RUNTIMES.join(',') === 'codex,claudecode,hermes,openclaw', 'host runtime priority should be codex -> claudecode -> hermes -> openclaw')
+assert(packageJson.dependencies?.['@anthropic-ai/claude-agent-sdk'], 'Claude Agent SDK dependency should be declared')
+const detachedGatewayArgs = buildGatewayArgs({
+  'codex-command': '/tmp/a2-fake-codex',
+  'codex-timeout-ms': '12345'
+}, 'helper@ExampleOwner', '/tmp/a2-runtime-key.json', null)
+assert(detachedGatewayArgs.includes('--codex-command') && detachedGatewayArgs.includes('/tmp/a2-fake-codex'), 'detached gateway args should forward --codex-command')
+assert(detachedGatewayArgs.includes('--codex-timeout-ms') && detachedGatewayArgs.includes('12345'), 'detached gateway args should forward --codex-timeout-ms')
+const defaultCodexClient = new CodexClient({ codexPath: '' })
+assert(defaultCodexClient.codexPath === '/Applications/Codex.app/Contents/Resources/codex', 'Codex client should ignore an empty path override and keep the default binary path')
+assert(resolveCodexThreadId({ thread: { id: 'nested_thread_id' } }) === 'nested_thread_id', 'Codex thread id resolver should support app-server thread.id payloads')
+assert(resolveCodexThreadId({ threadId: 'flat_thread_id' }) === 'flat_thread_id', 'Codex thread id resolver should support legacy flat payloads')
 
 const multimodalInbound = {
   request: {
@@ -78,6 +95,35 @@ assert(resolveEphemeralRuntimeSessionId({
 }, {
   conversationKey: 'api_fallback'
 }) === 'hermes-session-real', 'ephemeral cleanup should prefer runtimeSessionId over Hermes conversation name')
+assert(resolveEphemeralRuntimeSessionId({
+  claudeCodeSessionId: 'claude-session-real'
+}, {
+  conversationKey: 'api_fallback'
+}) === 'claude-session-real', 'ephemeral cleanup should recognize Claude Code session ids')
+
+const claudeDetectHome = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-claude-detect-'))
+try {
+  const fakeBinDir = path.join(claudeDetectHome, 'bin')
+  fs.mkdirSync(fakeBinDir, { recursive: true })
+  const fakeClaude = path.join(fakeBinDir, 'claude')
+  fs.writeFileSync(fakeClaude, `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "2.1.169"; exit 0; fi
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo '{"loggedIn":false}'; exit 1; fi
+exit 1
+`)
+  fs.chmodSync(fakeClaude, 0o755)
+  const result = spawnSync(process.execPath, ['./bin/a2-cli.js', 'host', 'detect', '--host-runtime', 'claudecode', '--claude-command', fakeClaude], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: claudeDetectHome, PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH || ''}` },
+    encoding: 'utf8'
+  })
+  assert(result.status === 0, `claudecode host detect with fake command should succeed: ${result.stderr || result.stdout}`)
+  const payload = JSON.parse(result.stdout)
+  assert(payload.detected === true && payload.authHealthy === false, 'claudecode host detect should not mark an unauthenticated HOME as auth healthy')
+  assert(String(payload.authHint || '').includes('claude auth login'), 'claudecode host detect should explain how to fix missing auth')
+} finally {
+  fs.rmSync(claudeDetectHome, { recursive: true, force: true })
+}
 
 assert(normalizeAgentSquaredAgentId('A2:Helper@ExampleOwner') === 'helper@exampleowner', 'A2-prefixed AgentSquared ID should provide a lowercase comparison key')
 assert(normalizeAgentSquaredAgentId('helper@ExampleOwner') === 'helper@exampleowner', 'bare AgentSquared ID should provide a lowercase comparison key')
@@ -548,13 +594,118 @@ try {
   } catch {}
 }
 
+const claudeSafeOptions = buildClaudeCodeSafeOptions({
+  claudeCommand: '/tmp/fake-claude',
+  cwd: process.cwd(),
+  settingSources: 'none',
+  timeoutMs: 5000
+})
+try {
+  assert(claudeSafeOptions.options.permissionMode === 'dontAsk', 'Claude Code adapter should default to dontAsk permission mode')
+  assert(claudeSafeOptions.options.settingSources === undefined, 'Claude Code adapter should not pass an empty settingSources argument by default')
+  assert(claudeSafeOptions.options.extraArgs?.['safe-mode'] === null, 'Claude Code adapter should enable safe-mode by default')
+  assert(claudeSafeOptions.options.tools.includes('Read') && claudeSafeOptions.options.tools.includes('Skill'), 'Claude Code safe tools should include read-only and skill tools')
+  assert(CLAUDE_CODE_DENIED_TOOLS.includes('Bash') && CLAUDE_CODE_DENIED_TOOLS.includes('mcp__*'), 'Claude Code denied tools should include Bash and MCP tools')
+  const bashDecision = await claudeSafeOptions.options.canUseTool('Bash', {}, { signal: new AbortController().signal })
+  assert(bashDecision.behavior === 'deny', 'Claude Code safe mode should deny Bash')
+  const readDecision = await claudeSafeOptions.options.canUseTool('Read', {}, { signal: new AbortController().signal })
+  assert(readDecision.behavior === 'allow', 'Claude Code safe mode should allow Read')
+} finally {
+  claudeSafeOptions.clearTimeout()
+}
+
+const parsedClaudeJson = parseClaudeCodeCombinedResult('```json\n{"peerResponse":"ok","ownerReport":"summary","decision":"done","final":true}\n```', {
+  defaultSkill: 'agent-mutual-learning',
+  remoteAgentId: 'guide@ExampleUser'
+})
+assert(parsedClaudeJson.peerResponse?.message?.parts?.[0]?.text === 'ok', 'Claude Code parser should parse fenced JSON')
+const parsedClaudeEscaped = parseClaudeCodeCombinedResult('"{\\"peerResponse\\":\\"escaped ok\\",\\"ownerReport\\":\\"summary\\"}"', {
+  defaultSkill: 'agent-mutual-learning'
+})
+assert(parsedClaudeEscaped.peerResponse?.message?.parts?.[0]?.text === 'escaped ok', 'Claude Code parser should parse escaped JSON strings')
+const parsedClaudePlain = parseClaudeCodeCombinedResult('plain reply', {
+  defaultSkill: 'agent-mutual-learning',
+  remoteAgentId: 'guide@ExampleUser'
+})
+assert(parsedClaudePlain.peerResponse?.metadata?.claudeCodeParseFallback === 'plain-text-task-response', 'Claude Code parser should fall back for plain text')
+
+const claudeDetectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-claude-detect-'))
+try {
+  const fakeClaude = path.join(claudeDetectDir, 'claude')
+  fs.writeFileSync(fakeClaude, [
+    '#!/usr/bin/env node',
+    'const args = process.argv.slice(2).join(" ");',
+    'if (args === "--version") { console.log("2.1.169 (Claude Code)"); process.exit(0); }',
+    'if (args === "auth status") { console.log(JSON.stringify({ loggedIn: true, authMethod: "oauth_token", apiProvider: "firstParty" })); process.exit(0); }',
+    'process.exit(1);'
+  ].join('\n'), 'utf8')
+  fs.chmodSync(fakeClaude, 0o755)
+  const detection = await detectClaudeCodeHostEnvironment({ command: fakeClaude })
+  assert(detection.detected === true && detection.authHealthy === true && detection.claudeCommand === fakeClaude, 'Claude Code detection should recognize authenticated fake claude command')
+} finally {
+  fs.rmSync(claudeDetectDir, { recursive: true, force: true })
+}
+
+const { createClaudeCodeAdapter } = await import('./adapters/claudecode/adapter.mjs')
+const fakeClaudeMessages = async function* () {
+  yield { type: 'system', subtype: 'init', session_id: 'claude-session-1' }
+  yield {
+    type: 'result',
+    subtype: 'success',
+    session_id: 'claude-session-1',
+    result: JSON.stringify({
+      peerResponse: 'Claude success!',
+      ownerReport: 'Claude summary.',
+      decision: 'done',
+      final: true
+    }),
+    usage: {
+      input_tokens: 20,
+      output_tokens: 5,
+      cache_creation_input_tokens: 1,
+      cache_read_input_tokens: 2
+    }
+  }
+}
+const claudeAdapter = createClaudeCodeAdapter({
+  localAgentId: 'helper@ExampleOwner',
+  claudeCommand: '/tmp/fake-claude',
+  timeoutMs: 5000,
+  queryImpl: () => fakeClaudeMessages()
+})
+const claudeResult = await claudeAdapter.executeInbound({
+  item: {
+    inboundId: 'inbound_claude_1',
+    remoteAgentId: 'guide@ExampleUser',
+    request: {
+      id: 'req_claude_1',
+      params: {
+        metadata: {
+          conversationKey: 'claude_conv',
+          turnIndex: 1
+        },
+        message: {
+          parts: [{ kind: 'text', text: 'Hello Claude Code' }]
+        }
+      }
+    }
+  },
+  selectedSkill: 'agent-mutual-learning'
+})
+assert(claudeResult.peerResponse?.message?.parts?.[0]?.text === 'Claude success!', 'Claude Code adapter should produce the correct combined output')
+assert(claudeResult.peerResponse?.metadata?.claudeCodeSessionId === 'claude-session-1', 'Claude Code adapter should expose session metadata')
+assert(claudeResult.peerResponse?.metadata?.usage?.inputTokens === 20, 'Claude Code adapter should expose usage metadata')
+
 // Test Codex Adapter with a Mock sub-process
 const codexTestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-codex-test-'))
 try {
   const fakeCodex = path.join(codexTestDir, 'fake-codex.mjs')
+  const fakeCodexArgvFile = path.join(codexTestDir, 'argv.json')
   fs.writeFileSync(fakeCodex, [
     '#!/usr/bin/env node',
+    'import fs from "node:fs";',
     'import readline from "node:readline";',
+    'if (process.env.A2_FAKE_CODEX_ARGV_FILE) fs.writeFileSync(process.env.A2_FAKE_CODEX_ARGV_FILE, JSON.stringify(process.argv.slice(2)), "utf8");',
     'const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: false });',
     'function write(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }',
     'rl.on("line", (line) => {',
@@ -562,7 +713,7 @@ try {
     '  if (msg.method === "initialize") {',
     '    write({ jsonrpc: "2.0", id: msg.id, result: { serverInfo: { name: "fake-codex" } } });',
     '  } else if (msg.method === "thread/start") {',
-    '    write({ jsonrpc: "2.0", id: msg.id, result: { id: "mock_thread_id" } });',
+    '    write({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: "mock_thread_id" } } });',
     '  } else if (msg.method === "thread/list") {',
     '    write({ jsonrpc: "2.0", id: msg.id, result: [{ id: "mock_thread_id", name: "agentsquared:test_conv" }] });',
     '  } else if (msg.method === "thread/name/set" || msg.method === "thread/resume") {',
@@ -586,8 +737,22 @@ try {
   })
 
   // Verify preflight
-  const preflightResult = await adapter.preflight()
-  assert(preflightResult.ok === true, 'Codex preflight should pass with fake-codex')
+  const previousFakeCodexArgvFile = process.env.A2_FAKE_CODEX_ARGV_FILE
+  try {
+    process.env.A2_FAKE_CODEX_ARGV_FILE = fakeCodexArgvFile
+    const preflightResult = await adapter.preflight()
+    assert(preflightResult.ok === true, 'Codex preflight should pass with fake-codex')
+    const codexSpawnArgs = JSON.parse(fs.readFileSync(fakeCodexArgvFile, 'utf8'))
+    assert(codexSpawnArgs.includes('app-server'), 'Codex client should start the app-server transport')
+    assert(codexSpawnArgs.includes('--config') && codexSpawnArgs.includes('sandbox_mode="read-only"'), 'Codex client should enforce read-only sandbox mode by default')
+    assert(codexSpawnArgs.includes('--config') && codexSpawnArgs.includes('approval_policy="never"'), 'Codex client should enforce non-interactive approval policy by default')
+  } finally {
+    if (previousFakeCodexArgvFile == null) {
+      delete process.env.A2_FAKE_CODEX_ARGV_FILE
+    } else {
+      process.env.A2_FAKE_CODEX_ARGV_FILE = previousFakeCodexArgvFile
+    }
+  }
 
   // Verify executeInbound (runCombined)
   const inboundItem = {

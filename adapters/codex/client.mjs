@@ -5,13 +5,34 @@ function clean(value) {
   return `${value ?? ''}`.trim()
 }
 
+export function resolveCodexThreadId(value = null) {
+  if (typeof value === 'string') {
+    return clean(value)
+  }
+  return clean(
+    value?.id
+    || value?.threadId
+    || value?.thread?.id
+    || value?.thread?.threadId
+  )
+}
+
 export class CodexClient {
   constructor({
     codexPath = '/Applications/Codex.app/Contents/Resources/codex',
-    timeoutMs = 180000
+    timeoutMs = 180000,
+    configOverrides = {
+      sandbox_mode: '"read-only"',
+      approval_policy: '"never"'
+    }
   } = {}) {
-    this.codexPath = clean(codexPath)
+    this.codexPath = clean(codexPath) || '/Applications/Codex.app/Contents/Resources/codex'
     this.timeoutMs = Math.max(1000, timeoutMs)
+    this.configOverrides = configOverrides && typeof configOverrides === 'object'
+      ? Object.entries(configOverrides)
+        .map(([key, value]) => [clean(key), clean(value)])
+        .filter(([key, value]) => key && value)
+      : []
     this.child = null
     this.rl = null
     this.requestId = 0
@@ -34,7 +55,13 @@ export class CodexClient {
     }
 
     try {
-      this.child = spawn(this.codexPath, ['app-server', '--listen', 'stdio://'], {
+      const args = [
+        'app-server',
+        ...this.configOverrides.flatMap(([key, value]) => ['--config', `${key}=${value}`]),
+        '--listen',
+        'stdio://'
+      ]
+      this.child = spawn(this.codexPath, args, {
         stdio: ['pipe', 'pipe', 'inherit'],
         env: childEnv
       })
@@ -223,6 +250,59 @@ export class CodexClient {
         }
       ]
     })
+  }
+
+  async smokeTurn({
+    prompt = 'Reply with exactly: OK',
+    timeoutMs = 45000
+  } = {}) {
+    const thread = await this.threadStart({ ephemeral: true })
+    const threadId = resolveCodexThreadId(thread)
+    if (!threadId) {
+      throw new Error('Codex thread/start did not return a thread id.')
+    }
+
+    let text = ''
+    let unsubscribe = () => {}
+    let timer = null
+    let settled = false
+    function cleanup() {
+      if (settled) {
+        return
+      }
+      settled = true
+      clearTimeout(timer)
+      unsubscribe()
+    }
+    const completed = new Promise((resolve, reject) => {
+      timer = setTimeout(() => {
+        cleanup()
+        reject(new Error(`Codex smoke turn timed out after ${timeoutMs}ms`))
+      }, Math.max(1000, timeoutMs))
+
+      unsubscribe = this.onEvent((event) => {
+        if (event.method === 'item/agentMessage/delta') {
+          text += event.params?.delta || event.params?.contentDelta || ''
+        }
+        if (event.method === 'turn/completed') {
+          cleanup()
+          const status = clean(event.params?.turn?.status)
+          if (status === 'failed') {
+            reject(new Error(event.params?.turn?.error?.message || 'Codex smoke turn failed'))
+          } else {
+            resolve({ threadId, text })
+          }
+        }
+      })
+    })
+
+    try {
+      await this.turnStart(threadId, prompt)
+      return await completed
+    } catch (error) {
+      cleanup()
+      throw error
+    }
   }
 
   async close() {

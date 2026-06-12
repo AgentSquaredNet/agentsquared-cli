@@ -2,7 +2,7 @@ import { createInboundAdapterPipeline, defaultInboundText, hasInboundImages } fr
 import { buildConversationSummaryPrompt, normalizeConversationSummary, parseAgentSquaredOutboundEnvelope } from '../../lib/conversation/templates.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import { createPeerBudget } from '../../lib/runtime/adapters.mjs'
-import { CodexClient } from './client.mjs'
+import { CodexClient, resolveCodexThreadId } from './client.mjs'
 import {
   buildCodexCombinedPrompt,
   buildCodexH2AStreamPrompt,
@@ -23,16 +23,17 @@ export function createCodexAdapter({
   codexPath = '/Applications/Codex.app/Contents/Resources/codex',
   timeoutMs = 180000
 } = {}) {
+  const resolvedCodexPath = clean(codexPath) || '/Applications/Codex.app/Contents/Resources/codex'
   const { consumePeerBudget } = createPeerBudget()
 
   async function preflight() {
-    const client = new CodexClient({ codexPath, timeoutMs })
+    const client = new CodexClient({ codexPath: resolvedCodexPath, timeoutMs })
     try {
       await client.connect()
       return {
         ok: true,
         transport: 'stdio',
-        codexPath
+        codexPath: resolvedCodexPath
       }
     } catch (error) {
       return {
@@ -46,11 +47,11 @@ export function createCodexAdapter({
   }
 
   async function summarizeConversation(context = {}) {
-    const client = new CodexClient({ codexPath, timeoutMs })
+    const client = new CodexClient({ codexPath: resolvedCodexPath, timeoutMs })
     try {
       await client.connect()
       const tempThread = await client.threadStart({ ephemeral: true })
-      const tempThreadId = tempThread?.id || tempThread?.threadId
+      const tempThreadId = resolveCodexThreadId(tempThread)
 
       if (!tempThreadId) {
         throw new Error('Failed to start temporary thread for summarization.')
@@ -66,25 +67,12 @@ export function createCodexAdapter({
         language: context.language
       })
 
-      const summaryPromise = new Promise((resolve, reject) => {
-        let text = ''
-        const unsubscribe = client.onEvent((event) => {
-          if (event.method === 'item/agentMessage/delta') {
-            text += event.params?.delta || event.params?.contentDelta || ''
-          }
-          if (event.method === 'turn/completed') {
-            unsubscribe()
-            if (event.params?.turn?.status === 'failed') {
-              reject(new Error(event.params?.turn?.error?.message || 'Summarization turn failed'))
-            } else {
-              resolve(text)
-            }
-          }
-        })
-      })
-
-      await client.turnStart(tempThreadId, prompt + '\nReturn only the concise owner-facing summary text.')
-      const summaryText = await summaryPromise
+      const { text: summaryText } = await runCodexTurn(
+        client,
+        tempThreadId,
+        prompt + '\nReturn only the concise owner-facing summary text.',
+        { label: 'Codex summarization turn' }
+      )
       
       return normalizeConversationSummary(scrubOutboundText(summaryText))
     } catch (error) {
@@ -100,7 +88,7 @@ export function createCodexAdapter({
   } = {}) {
     if (ephemeral) {
       const newThread = await client.threadStart({ ephemeral: true })
-      const threadId = newThread?.id || newThread?.threadId
+      const threadId = resolveCodexThreadId(newThread)
       if (!threadId) {
         throw new Error('Failed to create new ephemeral Codex thread.')
       }
@@ -115,7 +103,7 @@ export function createCodexAdapter({
       const list = Array.isArray(response) ? response : Array.isArray(response?.threads) ? response.threads : []
       const existing = list.find((t) => clean(t.name) === threadName)
       if (existing) {
-        threadId = existing.id || existing.threadId
+        threadId = resolveCodexThreadId(existing)
       }
     } catch (error) {
       console.warn(`[Codex Adapter] Warning fetching thread list: ${error.message}`)
@@ -126,7 +114,7 @@ export function createCodexAdapter({
       await client.threadResume(threadId)
     } else {
       const newThread = await client.threadStart()
-      threadId = newThread?.id || newThread?.threadId
+      threadId = resolveCodexThreadId(newThread)
       if (!threadId) {
         throw new Error('Failed to create new Codex thread.')
       }
@@ -134,6 +122,75 @@ export function createCodexAdapter({
     }
 
     return threadId
+  }
+
+  async function runCodexTurn(client, threadId, prompt, {
+    label = 'Codex turn',
+    emitStreamEvent = null
+  } = {}) {
+    let unsubscribe = () => {}
+    let settled = false
+    let timer = null
+    let text = ''
+    let lastTokenUsage = null
+
+    const executionPromise = new Promise((resolve, reject) => {
+      function cleanup() {
+        if (settled) {
+          return
+        }
+        settled = true
+        clearTimeout(timer)
+        unsubscribe()
+      }
+
+      timer = setTimeout(() => {
+        cleanup()
+        reject(new Error(`${label} timed out after ${timeoutMs}ms`))
+      }, Math.max(1000, timeoutMs))
+
+      unsubscribe = client.onEvent((event) => {
+        if (settled) {
+          return
+        }
+        if (event.method === 'thread/tokenUsage/updated') {
+          lastTokenUsage = event.params?.tokenUsage
+        }
+        if (event.method === 'item/agentMessage/delta') {
+          const delta = event.params?.delta || event.params?.contentDelta || ''
+          text += delta
+          if (delta && typeof emitStreamEvent === 'function') {
+            void emitStreamEvent({
+              type: 'text_delta',
+              delta,
+              source: 'codex',
+              createdAt: new Date().toISOString()
+            })
+          }
+        }
+        if (event.method === 'turn/completed') {
+          cleanup()
+          const turnStatus = event.params?.turn?.status
+          if (turnStatus === 'failed') {
+            reject(new Error(event.params?.turn?.error?.message || `${label} failed`))
+          } else {
+            resolve({ text, lastTokenUsage })
+          }
+        }
+      })
+    })
+
+    try {
+      await client.turnStart(threadId, prompt)
+      return await executionPromise
+    } catch (error) {
+      if (!settled) {
+        settled = true
+        clearTimeout(timer)
+        unsubscribe()
+      }
+      throw error
+    }
   }
 
   const { executeInbound } = createInboundAdapterPipeline({
@@ -160,7 +217,7 @@ export function createCodexAdapter({
       windowTurns: budget?.windowTurns
     }),
     executeWithRuntime: (pipelineBody) => {
-      const client = new CodexClient({ codexPath, timeoutMs })
+      const client = new CodexClient({ codexPath: resolvedCodexPath, timeoutMs })
       return (async () => {
         try {
           await client.connect()
@@ -213,31 +270,12 @@ export function createCodexAdapter({
         senderSkillInventory: clean(metadata?.localSkillInventory)
       })
 
-      let lastTokenUsage = null
-      const executionPromise = new Promise((resolve, reject) => {
-        let text = ''
-        const unsubscribe = client.onEvent((event) => {
-          if (event.method === 'thread/tokenUsage/updated') {
-            lastTokenUsage = event.params?.tokenUsage
-          }
-          if (event.method === 'item/agentMessage/delta') {
-            text += event.params?.delta || event.params?.contentDelta || ''
-          }
-          if (event.method === 'turn/completed') {
-            unsubscribe()
-            const turnStatus = event.params?.turn?.status
-            if (turnStatus === 'failed') {
-              const err = new Error(event.params?.turn?.error?.message || 'Codex combined execution turn failed')
-              reject(err)
-            } else {
-              resolve({ text, lastTokenUsage })
-            }
-          }
-        })
-      })
-
-      await client.turnStart(threadId, prompt)
-      const { text: resultText, lastTokenUsage: finalTokenUsage } = await executionPromise
+      const { text: resultText, lastTokenUsage: finalTokenUsage } = await runCodexTurn(
+        client,
+        threadId,
+        prompt,
+        { label: 'Codex combined execution turn' }
+      )
 
       const parsed = parseCodexCombinedResult(resultText, {
         defaultSkill: selectedSkill,
@@ -275,7 +313,7 @@ export function createCodexAdapter({
         parsed,
         runtimeMetadata: {
           codexThreadId: threadId,
-          codexPath
+          codexPath: resolvedCodexPath
         }
       }
     },
@@ -312,40 +350,15 @@ export function createCodexAdapter({
         conversationControl
       })
 
-      let lastTokenUsage = null
-      const executionPromise = new Promise((resolve, reject) => {
-        let text = ''
-        const unsubscribe = client.onEvent((event) => {
-          if (event.method === 'thread/tokenUsage/updated') {
-            lastTokenUsage = event.params?.tokenUsage
-          }
-          if (event.method === 'item/agentMessage/delta') {
-            const delta = event.params?.delta || event.params?.contentDelta || ''
-            text += delta
-            if (delta && typeof emitStreamEvent === 'function') {
-              void emitStreamEvent({
-                type: 'text_delta',
-                delta,
-                source: 'codex',
-                createdAt: new Date().toISOString()
-              })
-            }
-          }
-          if (event.method === 'turn/completed') {
-            unsubscribe()
-            const turnStatus = event.params?.turn?.status
-            if (turnStatus === 'failed') {
-              const err = new Error(event.params?.turn?.error?.message || 'Codex H2A stream turn failed')
-              reject(err)
-            } else {
-              resolve({ text, lastTokenUsage })
-            }
-          }
-        })
-      })
-
-      await client.turnStart(threadId, prompt)
-      const { text: replyText, lastTokenUsage: finalTokenUsage } = await executionPromise
+      const { text: replyText, lastTokenUsage: finalTokenUsage } = await runCodexTurn(
+        client,
+        threadId,
+        prompt,
+        {
+          label: 'Codex H2A stream turn',
+          emitStreamEvent
+        }
+      )
 
       let usage = null
       if (finalTokenUsage) {
@@ -385,7 +398,7 @@ export function createCodexAdapter({
         },
         runtimeMetadata: {
           codexThreadId: threadId,
-          codexPath,
+          codexPath: resolvedCodexPath,
           stream: true,
           inboundId
         }
@@ -429,7 +442,7 @@ export function createCodexAdapter({
     id: 'codex',
     mode: 'codex',
     transport: 'stdio',
-    codexPath,
+    codexPath: resolvedCodexPath,
     preflight,
     executeInbound,
     destroySession,

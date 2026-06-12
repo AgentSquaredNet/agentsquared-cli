@@ -5,12 +5,14 @@ import { detectHermesHostEnvironment } from './hermes/detect.mjs'
 import { detectParentRuntimeHint } from './hermes/common.mjs'
 import { createCodexAdapter } from './codex/adapter.mjs'
 import { detectCodexHostEnvironment } from './codex/detect.mjs'
+import { createClaudeCodeAdapter } from './claudecode/adapter.mjs'
+import { detectClaudeCodeHostEnvironment } from './claudecode/detect.mjs'
 
 function clean(value) {
   return `${value ?? ''}`.trim()
 }
 
-export const SUPPORTED_HOST_RUNTIMES = ['codex', 'openclaw', 'hermes']
+export const SUPPORTED_HOST_RUNTIMES = ['codex', 'claudecode', 'hermes', 'openclaw']
 
 function confidenceScore(confidence = '') {
   switch (clean(confidence).toLowerCase()) {
@@ -30,7 +32,7 @@ function detectionScore(detection = null) {
   if (!detection?.detected) {
     return base
   }
-  if (detection?.apiServerHealthy || detection?.rpcHealthy || detection?.codexCommandAvailable) {
+  if (detection?.apiServerHealthy || detection?.rpcHealthy || detection?.codexCommandAvailable || detection?.authHealthy) {
     return base + 3
   }
   if (detection?.gatewayServiceInstalled) {
@@ -43,7 +45,8 @@ export async function detectHostRuntimeEnvironment({
   preferred = 'auto',
   openclaw = {},
   hermes = {},
-  codex = {}
+  codex = {},
+  claudecode = {}
 } = {}) {
   const normalizedPreferred = clean(preferred).toLowerCase() || 'auto'
   if (normalizedPreferred === 'codex') {
@@ -52,6 +55,15 @@ export async function detectHostRuntimeEnvironment({
       ...detection,
       requested: 'codex',
       resolved: detection?.detected ? 'codex' : 'none',
+      explicit: true
+    }
+  }
+  if (normalizedPreferred === 'claudecode') {
+    const detection = await detectClaudeCodeHostEnvironment(claudecode)
+    return {
+      ...detection,
+      requested: 'claudecode',
+      resolved: detection?.detected ? 'claudecode' : 'none',
       explicit: true
     }
   }
@@ -96,15 +108,17 @@ export async function detectHostRuntimeEnvironment({
   }
 
   const parentRuntimeHint = detectParentRuntimeHint()
-  const [codexDetection, openclawDetection, hermesDetection] = await Promise.all([
+  const [codexDetection, claudeCodeDetection, hermesDetection, openclawDetection] = await Promise.all([
     detectCodexHostEnvironment(codex),
-    detectOpenClawHostEnvironment(openclaw),
-    detectHermesHostEnvironment(hermes)
+    detectClaudeCodeHostEnvironment(claudecode),
+    detectHermesHostEnvironment(hermes),
+    detectOpenClawHostEnvironment(openclaw)
   ])
   const candidates = [
     { id: 'codex', detection: codexDetection },
-    { id: 'openclaw', detection: openclawDetection },
-    { id: 'hermes', detection: hermesDetection }
+    { id: 'claudecode', detection: claudeCodeDetection },
+    { id: 'hermes', detection: hermesDetection },
+    { id: 'openclaw', detection: openclawDetection }
   ].filter((candidate) => candidate.detection?.detected)
 
   if (parentRuntimeHint) {
@@ -117,8 +131,9 @@ export async function detectHostRuntimeEnvironment({
         parentRuntimeHint,
         candidates: {
           codex: codexDetection,
-          openclaw: openclawDetection,
-          hermes: hermesDetection
+          claudecode: claudeCodeDetection,
+          hermes: hermesDetection,
+          openclaw: openclawDetection
         }
       }
     }
@@ -132,8 +147,9 @@ export async function detectHostRuntimeEnvironment({
       parentRuntimeHint,
       candidates: {
         codex: codexDetection,
-        openclaw: openclawDetection,
-        hermes: hermesDetection
+        claudecode: claudeCodeDetection,
+        hermes: hermesDetection,
+        openclaw: openclawDetection
       }
     }
   }
@@ -149,7 +165,13 @@ export async function detectHostRuntimeEnvironment({
     if (right.id === 'codex') {
       return 1
     }
-    if (left.id === 'openclaw') {
+    if (left.id === 'claudecode') {
+      return -1
+    }
+    if (right.id === 'claudecode') {
+      return 1
+    }
+    if (left.id === 'hermes') {
       return -1
     }
     return 1
@@ -160,12 +182,13 @@ export async function detectHostRuntimeEnvironment({
       requested: 'auto',
       resolved: winner.id,
       parentRuntimeHint,
-      candidates: {
-        codex: codexDetection,
-        openclaw: openclawDetection,
-        hermes: hermesDetection
+        candidates: {
+          codex: codexDetection,
+          claudecode: claudeCodeDetection,
+          hermes: hermesDetection,
+          openclaw: openclawDetection
+        }
       }
-    }
   }
   return {
     id: 'none',
@@ -177,8 +200,9 @@ export async function detectHostRuntimeEnvironment({
     parentRuntimeHint,
     candidates: {
       codex: codexDetection,
-      openclaw: openclawDetection,
-      hermes: hermesDetection
+      claudecode: claudeCodeDetection,
+      hermes: hermesDetection,
+      openclaw: openclawDetection
     }
   }
 }
@@ -188,13 +212,20 @@ export function createHostRuntimeAdapter({
   localAgentId,
   openclaw = {},
   hermes = {},
-  codex = {}
+  codex = {},
+  claudecode = {}
 } = {}) {
   const normalizedHostRuntime = clean(hostRuntime).toLowerCase() || 'none'
   if (normalizedHostRuntime === 'codex') {
     return createCodexAdapter({
       localAgentId,
       ...codex
+    })
+  }
+  if (normalizedHostRuntime === 'claudecode') {
+    return createClaudeCodeAdapter({
+      localAgentId,
+      ...claudecode
     })
   }
   if (normalizedHostRuntime === 'openclaw') {
@@ -214,5 +245,6 @@ export function createHostRuntimeAdapter({
 
 export {
   createOpenClawAdapter,
-  parseOpenClawTaskResult
+  parseOpenClawTaskResult,
+  createClaudeCodeAdapter
 }
