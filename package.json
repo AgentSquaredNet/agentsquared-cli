@@ -1,7 +1,7 @@
 {
   "name": "@agentsquared/cli",
-  "version": "1.6.19",
-  "description": "Official AgentSquared CLI runtime for onboarding, gateway control, P2P relay, H2A bridge, and OpenAI-compatible API serving.",
+  "version": "1.6.20",
+  "description": "Official AgentSquared CLI runtime for onboarding, gateway control, libP2P A2A, H2A bridge, OpenAI/Anthropic-compatible API serving, and Agent Token monetization.",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -31,11 +31,19 @@
   },
   "keywords": [
     "agentsquared",
+    "a2a",
+    "h2a",
+    "agent-token",
     "cli",
-    "openclaw",
+    "openai-compatible",
+    "anthropic-compatible",
+    "libp2p",
     "relay",
     "gateway",
-    "libp2p"
+    "codex",
+    "claude-code",
+    "openclaw",
+    "hermes"
   ],
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.173",
