@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { Readable } from 'node:stream'
 
 import { hermesProjectRoot } from './adapters/hermes/common.mjs'
 import { extractHermesRuntimeUsage } from './adapters/hermes/api_client.mjs'
@@ -12,8 +13,10 @@ import { findLocalOfficialSkill, findOfficialSkillsRoot } from './lib/conversati
 import { normalizeConversationControl } from './lib/conversation/policy.mjs'
 import { buildReceiverBaseReport, buildSenderBaseReport, renderConversationDetails } from './lib/conversation/templates.mjs'
 import { createInboxStore } from './lib/gateway/inbox.mjs'
+import { assertLoopbackGatewayHost, readJson as readGatewayJson } from './lib/gateway/server.mjs'
 import { buildGatewayArgs, discoverLocalAgentProfiles } from './lib/gateway/lifecycle.mjs'
 import { buildEd25519Bundle, writeRuntimeKeyBundle } from './lib/runtime/keys.mjs'
+import { scrubOutboundText } from './lib/runtime/safety.mjs'
 import { defaultInboundText, hasInboundImages, inboundImageParts } from './lib/runtime/adapter_pipeline.mjs'
 import { resolveEphemeralRuntimeSessionId } from './lib/runtime/executor.mjs'
 import { createAgentRouter } from './lib/routing/agent_router.mjs'
@@ -47,6 +50,27 @@ assertCliSmoke(['--version'], packageJson.version, 'a2-cli --version should prin
 assert(typeof resolveHermesOwnerTarget === 'function', 'Hermes adapter should export owner-route resolver used by CLI')
 assert(SUPPORTED_HOST_RUNTIMES.join(',') === 'codex,claudecode,hermes,openclaw', 'host runtime priority should be codex -> claudecode -> hermes -> openclaw')
 assert(packageJson.dependencies?.['@anthropic-ai/claude-agent-sdk'], 'Claude Agent SDK dependency should be declared')
+assert(packageJson.version === '1.7.1', 'package version should be 1.7.1')
+assert(packageJson.dependencies?.ws === '^8.21.0', 'ws dependency should use the audited safe 8.x range')
+assert(assertLoopbackGatewayHost('127.0.0.1') === '127.0.0.1', 'gateway host should allow IPv4 loopback')
+assert(assertLoopbackGatewayHost('localhost') === 'localhost', 'gateway host should allow localhost')
+try {
+  assertLoopbackGatewayHost('0.0.0.0')
+  assert(false, 'gateway host should reject wildcard bind')
+} catch (error) {
+  assert(error.detailCode === 'gateway_control_host_not_loopback', 'wrong non-loopback gateway host error')
+}
+try {
+  await readGatewayJson(Readable.from([Buffer.alloc(8)]), { maxBytes: 4 })
+  assert(false, 'gateway JSON reader should enforce body limit')
+} catch (error) {
+  assert(error.code === 413, 'gateway JSON body limit should return 413')
+}
+const scrubbedSecrets = scrubOutboundText('Authorization: Bearer a2_sk_abcdefghijklmnopqrstuvwxyz and key sk-proj-abcdefghijklmnopqrstuvwxyz and aws AKIA1234567890ABCDEF and jwt eyJhbGciOiJIUzI1NiJ9.abcdefghijklmnopqrstuvwxyz.abcdefghijklmnopqrstuvwxyz')
+assert(!scrubbedSecrets.includes('a2_sk_abcdefghijklmnopqrstuvwxyz'), 'redaction should scrub AgentSquared API keys')
+assert(!scrubbedSecrets.includes('sk-proj-abcdefghijklmnopqrstuvwxyz'), 'redaction should scrub OpenAI project keys')
+assert(!scrubbedSecrets.includes('AKIA1234567890ABCDEF'), 'redaction should scrub AWS access keys')
+assert(!scrubbedSecrets.includes('eyJhbGciOiJIUzI1NiJ9'), 'redaction should scrub JWT-like tokens')
 const detachedGatewayArgs = buildGatewayArgs({
   'codex-command': '/tmp/a2-fake-codex',
   'codex-timeout-ms': '12345'
@@ -449,6 +473,58 @@ try {
   fs.rmSync(marketplaceWorkspace, { recursive: true, force: true })
 }
 
+const unofficialSkillWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'a2-unofficial-skill-'))
+const previousOfficialSkillsDir = process.env.A2_SKILLS_DIR
+try {
+  const officialRoot = path.join(unofficialSkillWorkspace, 'official-skills')
+  const officialFriendDir = path.join(officialRoot, 'friends', 'friend-im')
+  const unofficialDir = path.join(unofficialSkillWorkspace, 'copied-skill')
+  fs.mkdirSync(officialFriendDir, { recursive: true })
+  fs.mkdirSync(unofficialDir, { recursive: true })
+  fs.writeFileSync(path.join(officialRoot, 'SKILL.md'), [
+    '---',
+    'name: agentsquared-official-skills',
+    '---',
+    '# AgentSquared'
+  ].join('\n'), 'utf8')
+  fs.writeFileSync(path.join(officialFriendDir, 'SKILL.md'), [
+    '---',
+    'name: friend-im',
+    'maxTurns: 1',
+    '---',
+    '# Friend IM'
+  ].join('\n'), 'utf8')
+  const unofficialSkillFile = path.join(unofficialDir, 'SKILL.md')
+  fs.writeFileSync(unofficialSkillFile, [
+    '---',
+    'name: friend-im',
+    'maxTurns: 1',
+    '---',
+    '# Copied Friend IM'
+  ].join('\n'), 'utf8')
+  process.env.A2_SKILLS_DIR = officialRoot
+  const result = spawnSync(process.execPath, ['./bin/a2-cli.js', 'friend', 'msg',
+    '--target-agent', 'A2:helper@ExampleOwner',
+    '--text', 'hello',
+    '--skill-name', 'friend-im',
+    '--skill-file', unofficialSkillFile
+  ], {
+    cwd: process.cwd(),
+    env: { ...process.env },
+    encoding: 'utf8'
+  })
+  assert(result.status === 1, 'friend msg should reject copied unofficial skill files before gateway use')
+  const payload = JSON.parse(result.stdout)
+  assert(payload.error?.code === 'local-official-skill-required', 'unofficial skill file should return local-official-skill-required')
+} finally {
+  if (previousOfficialSkillsDir == null) {
+    delete process.env.A2_SKILLS_DIR
+  } else {
+    process.env.A2_SKILLS_DIR = previousOfficialSkillsDir
+  }
+  fs.rmSync(unofficialSkillWorkspace, { recursive: true, force: true })
+}
+
 let unavailableResponded = null
 let unavailableNotified = null
 let unavailableExecuted = false
@@ -557,7 +633,7 @@ try {
         params: {
           metadata: {
             source: 'openai-compatible-api',
-            openaiRequestId: 'api-req-id-2'
+            apiRequestId: 'api-req-id-2'
           }
         }
       }

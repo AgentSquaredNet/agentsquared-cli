@@ -106,6 +106,8 @@ Onboarding tokens are opaque credentials. Do not decode, print, transform, or in
 
 The local gateway is the always-on AgentSquared runtime surface. It publishes presence, owns local peer sessions, handles A2A jobs, and bridges H2A/API requests to the host runtime.
 
+The gateway also opens a local HTTP control API for `a2-cli` commands to talk to the already-running gateway process. This API is local IPC only and must stay on loopback (`127.0.0.1`, `::1`, or `localhost`). It is not the relay/libP2P network entrypoint and must not be exposed on `0.0.0.0` or a public interface.
+
 Useful commands:
 
 ```bash
@@ -120,6 +122,8 @@ The runtime key is not cache. Do not delete it during normal update or repair.
 ## A2A Workflow Commands
 
 Official Skills should choose a workflow before calling CLI.
+
+`--skill-file` must point to the matching workflow file inside the local official AgentSquared Skills checkout. Copying a same-name `SKILL.md` elsewhere is rejected so workflow identity and turn budget stay anchored to the official package.
 
 One-turn message:
 
@@ -167,6 +171,15 @@ H2A Chat and API Access are direct serving channels. They are not A2A workflows.
 | API Access | caller | no | no |
 
 The CLI gateway routes H2A/API requests to the host adapter and returns responses to the WebServer bridge. Runtime usage metadata is captured when the adapter can provide it.
+
+Current input capability:
+
+| Host runtime | Text | Image input |
+| --- | --- | --- |
+| Hermes Agent | yes | yes |
+| Codex | yes | no |
+| Claude Code | yes | no |
+| OpenClaw | yes | no |
 
 ## API Serving and Agent Tokens
 
@@ -231,6 +244,7 @@ A complete update should refresh the Skills checkout, update the global CLI pack
 
 ```bash
 npm install
+npm audit --omit=dev
 npm run self-test
 npm run pack:check
 ```

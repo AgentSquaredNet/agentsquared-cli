@@ -35,6 +35,7 @@ import { buildStandardRuntimeOwnerLines, buildStandardRuntimeReport } from './li
 import { chooseInboundSkill, resolveMailboxKey } from './lib/routing/agent_router.mjs'
 import { createLocalRuntimeExecutor } from './lib/runtime/executor.mjs'
 import { createLiveConversationStore } from './lib/conversation/store.mjs'
+import { findOfficialSkillsRoot } from './lib/conversation/local_skills.mjs'
 import { clampConversationMaxTurns, normalizeConversationControl, normalizeSharedSkillName, parseSkillDocumentPolicy, shouldContinueConversation } from './lib/conversation/policy.mjs'
 import {
   buildGatewayArgs,
@@ -526,10 +527,20 @@ function loadLocalSkillFile(skillFile) {
   const policy = parseSkillDocumentPolicy(text, {
     fallbackName: path.basename(path.dirname(resolved)) || path.basename(resolved, path.extname(resolved))
   })
+  const officialRoot = findOfficialSkillsRoot()
+  const allowUnofficial = isTrueFlag(process.env.A2_ALLOW_UNOFFICIAL_SKILL_FILE)
+  const resolvedReal = fs.realpathSync(resolved)
+  const officialRootReal = officialRoot ? fs.realpathSync(officialRoot) : ''
+  const official = Boolean(officialRootReal && (
+    resolvedReal === officialRootReal || resolvedReal.startsWith(`${officialRootReal}${path.sep}`)
+  ))
   return {
     path: resolved,
     name: policy.name,
     maxTurns: policy.maxTurns,
+    official,
+    allowUnofficial,
+    officialRoot,
     conversationPolicy: {
       maxTurns: policy.maxTurns
     }
@@ -578,6 +589,26 @@ function reportMismatchedFriendWorkflow({
     ownerFacingMode: 'internal-retry',
     ownerFacingInstruction: 'Do not report this internal CLI failure to the owner yet. Retry with a matching --skill-name and --skill-file from the AgentSquared skill checkout.',
     stdoutLines: []
+  })
+  process.exitCode = 1
+}
+
+function reportUnofficialFriendWorkflow({
+  skillFile = '',
+  officialRoot = ''
+} = {}) {
+  printJson({
+    ok: false,
+    error: {
+      code: 'local-official-skill-required',
+      message: `AgentSquared workflow file is not inside the local official Skills checkout: ${clean(skillFile) || '(missing)'}.`,
+      detail: clean(officialRoot)
+        ? `Use the matching SKILL.md under ${officialRoot}, or set A2_ALLOW_UNOFFICIAL_SKILL_FILE=1 only for local development.`
+        : 'Install or update the AgentSquared official Skills checkout, then retry with the official workflow file. Set A2_ALLOW_UNOFFICIAL_SKILL_FILE=1 only for local development.'
+    },
+    ownerNotification: 'not-sent',
+    ownerFacingMode: 'internal-retry',
+    ownerFacingInstruction: 'Do not report this internal CLI failure to the owner yet. Retry with --skill-file pointing to the local official AgentSquared Skills checkout.'
   })
   process.exitCode = 1
 }
@@ -1906,6 +1937,13 @@ async function commandFriendMessage(args) {
       explicitSkillName,
       localSkillName: localSkill.name,
       skillFile
+    })
+    return
+  }
+  if (!localSkill.official && !localSkill.allowUnofficial) {
+    reportUnofficialFriendWorkflow({
+      skillFile: localSkill.path || skillFile,
+      officialRoot: localSkill.officialRoot
     })
     return
   }
