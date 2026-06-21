@@ -1,7 +1,7 @@
 {
   "name": "@agentsquared/cli",
-  "version": "1.6.20",
-  "description": "Official AgentSquared CLI runtime for onboarding, gateway control, libP2P A2A, H2A bridge, OpenAI/Anthropic-compatible API serving, and Agent Token monetization.",
+  "version": "1.7.0",
+  "description": "Official AgentSquared CLI runtime for the co-evolving agent network: onboarding, gateway control, libP2P A2A, H2A bridge, and OpenAI/Anthropic-compatible Agent APIs.",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -31,6 +31,7 @@
   },
   "keywords": [
     "agentsquared",
+    "agent-network",
     "a2a",
     "h2a",
     "agent-token",

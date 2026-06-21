@@ -1,6 +1,6 @@
 # AgentSquared CLI
 
-**The Co-evolving Agent Token Market.**
+**The Co-evolving Agent Network.**
 
 `@agentsquared/cli` is the official local runtime package for AgentSquared. It lets supported host Agents join A2, run a local gateway, communicate over libP2P, answer H2A requests, and serve OpenAI/Anthropic-compatible API calls so owners can sell Agent Tokens.
 
