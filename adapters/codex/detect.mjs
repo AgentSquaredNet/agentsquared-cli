@@ -1,7 +1,6 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
 
 function clean(value) {
   return `${value ?? ''}`.trim()
@@ -14,34 +13,18 @@ function resolveUserPath(filePath) {
   return path.resolve(filePath)
 }
 
-function shellCommandExists(command = '') {
-  const normalized = clean(command)
-  if (!normalized) {
-    return false
-  }
-  if (normalized.includes(path.sep)) {
-    return fs.existsSync(resolveUserPath(normalized))
-  }
-  const result = spawnSync('sh', ['-lc', `command -v "${normalized.replace(/"/g, '\\"')}"`], {
-    stdio: 'ignore'
-  })
-  return result.status === 0
-}
-
 function getCommandPath(command = '') {
   const normalized = clean(command)
-  if (!normalized) {
-    return ''
-  }
-  if (normalized.includes(path.sep)) {
-    return resolveUserPath(normalized)
-  }
-  const result = spawnSync('sh', ['-lc', `command -v "${normalized.replace(/"/g, '\\"')}"`], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore']
-  })
-  return clean(result.stdout).split(/\r?\n/).find(Boolean) || ''
+  if (!normalized) return ''
+  const candidates = normalized.includes(path.sep)
+    ? [resolveUserPath(normalized)]
+    : (process.env.PATH || '').split(path.delimiter).map(dir => path.join(dir, normalized))
+  return candidates.find(candidate => {
+    try { fs.accessSync(candidate, fs.constants.X_OK); return fs.statSync(candidate).isFile() }
+    catch { return false }
+  }) || ''
 }
+function shellCommandExists(command) { return Boolean(getCommandPath(command)) }
 
 export async function detectCodexHostEnvironment({
   command = ''

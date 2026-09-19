@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { buildHermesApiBase } from './common.mjs'
 
 function clean(value) {
@@ -8,12 +9,13 @@ export async function fetchHermesJson(apiBase, pathname, {
   method = 'GET',
   apiKey = '',
   body = null,
-  timeoutMs = 10000
+  timeoutMs = 10000,
+  extraHeaders = {}
 } = {}) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), Math.max(250, timeoutMs))
   try {
-    const headers = {}
+    const headers = { ...extraHeaders }
     if (clean(apiKey)) {
       headers.Authorization = `Bearer ${clean(apiKey)}`
     }
@@ -78,12 +80,13 @@ export async function fetchHermesSse(apiBase, pathname, {
   apiKey = '',
   body = null,
   timeoutMs = 180000,
-  onEvent = null
+  onEvent = null,
+  extraHeaders = {}
 } = {}) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), Math.max(250, timeoutMs))
   try {
-    const headers = { Accept: 'text/event-stream' }
+    const headers = { ...extraHeaders, Accept: 'text/event-stream' }
     if (clean(apiKey)) {
       headers.Authorization = `Bearer ${clean(apiKey)}`
     }
@@ -111,6 +114,7 @@ export async function fetchHermesSse(apiBase, pathname, {
       throw new Error('Hermes API server did not return a readable SSE body.')
     }
     const reader = response.body.getReader()
+    try {
     const decoder = new TextDecoder()
     let buffer = ''
     for (;;) {
@@ -131,11 +135,13 @@ export async function fetchHermesSse(apiBase, pathname, {
         boundary = buffer.search(/\r?\n\r?\n/)
       }
     }
+    buffer += decoder.decode()
     const tail = buffer.trim()
     if (tail) {
       await onEvent?.(parseSseFrame(tail))
     }
     return { ok: true, status: response.status, sessionId }
+    } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
   } finally {
     clearTimeout(timeout)
   }
@@ -252,11 +258,11 @@ export async function checkHermesApiServerHealth({
         capabilities
       }
     }
-    if (capabilities.payload?.features?.responses_api !== true) {
+    if (['responses_api', 'run_status', 'run_events_sse', 'run_stop'].some((key) => capabilities.payload?.features?.[key] !== true)) {
       return {
         ok: false,
         apiBase: resolvedBase,
-        reason: 'capabilities-responses-api-missing',
+        reason: 'capabilities-responses-or-runs-missing',
         health,
         models,
         capabilities
@@ -321,6 +327,18 @@ export async function postHermesResponse({
   return response.payload
 }
 
+export function hermesRunInput(input) {
+  if (!Array.isArray(input)) return input
+  // Runs forwards content to run_conversation; it does not perform Responses
+  // input_image conversion. The native conversation uses chat content parts.
+  return input.map(message => ({ ...message, content: Array.isArray(message.content)
+    ? message.content.map(part => {
+      if (part.type === 'input_text') return { type: 'text', text: part.text }
+      if (part.type === 'input_image') return { type: 'image_url', image_url: { url: part.image_url, ...(part.detail ? { detail: part.detail } : {}) } }
+      return part
+    }) : message.content }))
+}
+
 export async function postHermesResponseStream({
   apiBase = '',
   envVars = {},
@@ -333,58 +351,58 @@ export async function postHermesResponseStream({
   onSessionId = null
 } = {}) {
   const resolvedBase = buildHermesApiBase({ apiBase, envVars })
-  let completedPayload = null
-  let failedPayload = null
-  let accumulatedText = ''
-  const response = await fetchHermesSse(resolvedBase, '/v1/responses', {
-    method: 'POST',
-    apiKey: clean(envVars.API_SERVER_KEY),
-    timeoutMs,
-    body: {
-      input,
-      instructions,
-      conversation: clean(conversation) || undefined,
-      store: Boolean(store),
-      stream: true
-    },
-    onEvent: async ({ event, data }) => {
-      const type = clean(data?.type || event)
-      if (type === 'response.output_text.delta') {
-        const delta = `${data?.delta ?? ''}`
-        if (delta) {
-          accumulatedText += delta
-          await onTextDelta?.(delta)
-        }
-        return
-      }
-      if (type === 'response.completed') {
-        completedPayload = data?.response ?? data
-        return
-      }
-      if (type === 'response.failed') {
-        failedPayload = data?.response ?? data
-      }
-    }
+  const apiKey = clean(envVars.API_SERVER_KEY)
+  const startedAt = Date.now()
+  const remaining = () => Math.max(250, timeoutMs - (Date.now() - startedAt))
+  const started = await fetchHermesJson(resolvedBase, '/v1/runs', {
+    method: 'POST', apiKey, timeoutMs: remaining(),
+    extraHeaders: { 'Idempotency-Key': randomUUID(), ...(conversation ? { 'X-Hermes-Session-Key': conversation } : {}) },
+    body: { input: hermesRunInput(input), instructions }
   })
-  if (response.sessionId && typeof onSessionId === 'function') {
-    onSessionId(response.sessionId)
-  }
-  if (!response.ok) {
-    const detail = clean(response?.payload?.error?.message || response?.payload?.message || response?.payload)
-    throw new Error(detail || `Hermes API server stream request failed with status ${response.status}`)
-  }
-  if (failedPayload) {
-    const detail = clean(failedPayload?.error?.message || failedPayload?.message)
-    throw new Error(detail || 'Hermes API server stream failed.')
-  }
-  if (completedPayload) {
-    return completedPayload
-  }
-  return {
-    output: [{
-      type: 'message',
-      content: [{ type: 'output_text', text: accumulatedText }]
-    }]
+  const runId = started.payload?.run_id
+  if (!started.ok || !runId) throw new Error(`Hermes run creation failed (HTTP ${started.status})`)
+  const route = `/v1/runs/${encodeURIComponent(runId)}`
+  let terminal = null
+  try {
+    // Reconnecting subscribes to the same run; never repeat run creation.
+    try {
+      const stream = await fetchHermesSse(resolvedBase, `${route}/events`, {
+        method: 'GET', apiKey, timeoutMs: remaining(),
+        onEvent: async ({ event, data }) => {
+          const type = data?.event || event
+          if (type === 'message.delta') await onTextDelta?.(`${data.delta ?? ''}`)
+          if (type === 'approval.request') {
+            await fetchHermesJson(resolvedBase, `${route}/approval`, {
+              method: 'POST', apiKey, timeoutMs: remaining(),
+              body: { request_id: data.request_id, choice: 'deny' }
+            })
+          }
+          if (['run.completed', 'run.failed', 'run.cancelled'].includes(type)) terminal = data
+        }
+      })
+      if (!stream.ok && stream.status !== 404) throw new Error(`Hermes events failed (HTTP ${stream.status})`)
+    } catch (error) {
+      if (Date.now() - startedAt >= timeoutMs) throw error
+      // Read authoritative status after transport loss instead of claiming completion.
+    }
+    while (Date.now() - startedAt < timeoutMs) {
+      const status = await fetchHermesJson(resolvedBase, route, { apiKey, timeoutMs: remaining() })
+      if (!status.ok) throw new Error(`Hermes run status failed (HTTP ${status.status})`)
+      const value = status.payload
+      if (value.session_id) onSessionId?.(value.session_id)
+      if (value.status === 'completed') {
+        return { output: [{ type: 'message', content: [{ type: 'output_text', text: value.output ?? terminal?.output ?? '' }] }], usage: value.usage ?? terminal?.usage }
+      }
+      if (['failed', 'cancelled'].includes(value.status)) throw new Error(`Hermes run ${value.status}${value.error ? `: ${value.error}` : ''}`)
+      await new Promise(resolve => setTimeout(resolve, Math.min(250, remaining())))
+    }
+    throw new Error('Hermes run timed out')
+  } catch (error) {
+    try {
+      const stopped = await fetchHermesJson(resolvedBase, `${route}/stop`, { method: 'POST', apiKey, body: {}, timeoutMs: 10000 })
+      if (!stopped.ok) error.message += `; run cancellation unconfirmed (HTTP ${stopped.status})`
+    } catch { error.message += '; run cancellation unconfirmed' }
+    throw error
   }
 }
 

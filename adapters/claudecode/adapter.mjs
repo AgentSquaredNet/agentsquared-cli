@@ -1,5 +1,5 @@
 import { buildConversationSummaryPrompt, normalizeConversationSummary, parseAgentSquaredOutboundEnvelope } from '../../lib/conversation/templates.mjs'
-import { createInboundAdapterPipeline, defaultInboundText, hasInboundImages } from '../../lib/runtime/adapter_pipeline.mjs'
+import { createInboundAdapterPipeline, defaultInboundText, inboundImageParts } from '../../lib/runtime/adapter_pipeline.mjs'
 import { createPeerBudget } from '../../lib/runtime/adapters.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import { ClaudeCodeClient } from './client.mjs'
@@ -11,6 +11,18 @@ import {
   parseClaudeCodeCombinedResult,
   peerResponseText
 } from './helpers.mjs'
+
+export function claudeImageInputs(item) {
+  return inboundImageParts(item).map(part => {
+    const src = part.source || {}
+    if (src.type === 'url' && /^https?:\/\//.test(src.url || '')) return { type: 'image', source: { type: 'url', url: src.url } }
+    const media_type = src.mediaType || part.mimeType
+    if (src.type === 'base64' && src.data && ['image/jpeg','image/png','image/gif','image/webp'].includes(media_type)) {
+      return { type: 'image', source: { type: 'base64', media_type, data: src.data } }
+    }
+    throw new Error('Unsupported Claude image source')
+  })
+}
 
 function clean(value) {
   return `${value ?? ''}`.trim()
@@ -127,12 +139,6 @@ export function createClaudeCodeAdapter({
       inboundId
     }) => {
       const channelKind = clean(metadata?.channelKind).toLowerCase()
-      if (hasInboundImages(item)) {
-        const error = new Error('Claude Code adapter does not support image input yet.')
-        error.code = 400
-        error.detailCode = 'runtime_multimodal_unsupported'
-        throw error
-      }
 
       const statelessChannel = channelKind === 'h2a' || channelKind === 'api'
       const resume = statelessChannel ? '' : clean(sessionByConversationKey.get(conversationKey))
@@ -145,6 +151,7 @@ export function createClaudeCodeAdapter({
         senderSkillInventory: clean(metadata?.localSkillInventory)
       })
       const result = await createClient().query(prompt, {
+        images: claudeImageInputs(item),
         resume,
         persistSession: !statelessChannel
       })
@@ -191,12 +198,6 @@ export function createClaudeCodeAdapter({
       inboundId,
       emitStreamEvent
     }) => {
-      if (hasInboundImages(item)) {
-        const error = new Error('Claude Code adapter does not support image input yet.')
-        error.code = 400
-        error.detailCode = 'runtime_multimodal_unsupported'
-        throw error
-      }
       const prompt = buildClaudeCodeH2AStreamPrompt({
         localAgentId,
         selectedSkill,
@@ -204,6 +205,7 @@ export function createClaudeCodeAdapter({
         conversationTranscript
       })
       const result = await createClient().query(prompt, {
+        images: claudeImageInputs(item),
         persistSession: false,
         includePartialMessages: true,
         emitDelta: async (delta) => {

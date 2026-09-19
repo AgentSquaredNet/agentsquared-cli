@@ -1,4 +1,5 @@
-import { createInboundAdapterPipeline, defaultInboundText, hasInboundImages } from '../../lib/runtime/adapter_pipeline.mjs'
+import { extractCodexUsage } from './usage.mjs'
+import { createInboundAdapterPipeline, defaultInboundText, inboundImageParts } from '../../lib/runtime/adapter_pipeline.mjs'
 import { buildConversationSummaryPrompt, normalizeConversationSummary, parseAgentSquaredOutboundEnvelope } from '../../lib/conversation/templates.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
 import { createPeerBudget } from '../../lib/runtime/adapters.mjs'
@@ -12,6 +13,17 @@ import {
   peerResponseText,
   stableId
 } from './helpers.mjs'
+
+export function codexImageInputs(item) {
+  return inboundImageParts(item).map(part => {
+    const source = part.source || {}
+    if (source.type === 'base64' && source.data && /^image\//.test(source.mediaType || part.mimeType || '')) {
+      return { type: 'image', url: `data:${source.mediaType || part.mimeType};base64,${source.data}` }
+    }
+    if (source.type === 'url' && /^https?:\/\//.test(source.url || '')) return { type: 'image', url: source.url }
+    throw new Error('Unsupported Codex image source; expected an HTTP URL or base64 image')
+  })
+}
 
 function clean(value) {
   return `${value ?? ''}`.trim()
@@ -97,17 +109,16 @@ export function createCodexAdapter({
     const threadName = `agentsquared:${conversationKey}`
     let threadId = null
 
-    // 1. Fetch recent threads
-    try {
-      const response = await client.threadList(50)
-      const list = Array.isArray(response) ? response : Array.isArray(response?.threads) ? response.threads : []
-      const existing = list.find((t) => clean(t.name) === threadName)
+    let cursor = null
+    do {
+      const response = await client.threadList(100, cursor, threadName)
+      const existing = response.data.find((t) => clean(t.name) === threadName)
       if (existing) {
         threadId = resolveCodexThreadId(existing)
+        break
       }
-    } catch (error) {
-      console.warn(`[Codex Adapter] Warning fetching thread list: ${error.message}`)
-    }
+      cursor = response.nextCursor
+    } while (cursor)
 
     // 2. Resume if exists, else start new
     if (threadId) {
@@ -126,13 +137,15 @@ export function createCodexAdapter({
 
   async function runCodexTurn(client, threadId, prompt, {
     label = 'Codex turn',
-    emitStreamEvent = null
+    emitStreamEvent = null,
+    images = []
   } = {}) {
     let unsubscribe = () => {}
     let settled = false
     let timer = null
     let text = ''
     let lastTokenUsage = null
+    let turnId = null
 
     const executionPromise = new Promise((resolve, reject) => {
       function cleanup() {
@@ -146,11 +159,13 @@ export function createCodexAdapter({
 
       timer = setTimeout(() => {
         cleanup()
+        if (turnId) void client.turnInterrupt(threadId, turnId).catch(() => {})
         reject(new Error(`${label} timed out after ${timeoutMs}ms`))
       }, Math.max(1000, timeoutMs))
 
       unsubscribe = client.onEvent((event) => {
-        if (settled) {
+        if (event.method === 'transport/error') { cleanup(); reject(new Error(event.params.message)); return }
+        if (settled || event.params?.threadId !== threadId) {
           return
         }
         if (event.method === 'thread/tokenUsage/updated') {
@@ -171,7 +186,7 @@ export function createCodexAdapter({
         if (event.method === 'turn/completed') {
           cleanup()
           const turnStatus = event.params?.turn?.status
-          if (turnStatus === 'failed') {
+          if (turnStatus !== 'completed') {
             reject(new Error(event.params?.turn?.error?.message || `${label} failed`))
           } else {
             resolve({ text, lastTokenUsage })
@@ -181,8 +196,10 @@ export function createCodexAdapter({
     })
 
     try {
-      await client.turnStart(threadId, prompt)
-      return await executionPromise
+      const [, result] = await Promise.all([
+        client.turnStart(threadId, prompt, images).then(started => { turnId = started.turn.id }), executionPromise
+      ])
+      return result
     } catch (error) {
       if (!settled) {
         settled = true
@@ -251,12 +268,6 @@ export function createCodexAdapter({
       const { client } = runtimeContext
       const channelKind = clean(metadata?.channelKind).toLowerCase()
       
-      if (hasInboundImages(item)) {
-        const error = new Error('Codex adapter does not support image input yet.')
-        error.code = 400
-        error.detailCode = 'runtime_multimodal_unsupported'
-        throw error
-      }
 
       const threadId = await resolveOrCreateThread(client, conversationKey, {
         ephemeral: channelKind === 'h2a' || channelKind === 'api'
@@ -274,7 +285,7 @@ export function createCodexAdapter({
         client,
         threadId,
         prompt,
-        { label: 'Codex combined execution turn' }
+        { label: 'Codex combined execution turn', images: codexImageInputs(item) }
       )
 
       const parsed = parseCodexCombinedResult(resultText, {
@@ -287,16 +298,7 @@ export function createCodexAdapter({
       })
 
       if (finalTokenUsage) {
-        const last = finalTokenUsage.last || finalTokenUsage.total || {}
-        const usage = {
-          runtime: 'codex',
-          usageMode: 'four_tier',
-          accurate: true,
-          inputTokens: last.inputTokens ?? 0,
-          outputTokens: last.outputTokens ?? 0,
-          cacheCreationInputTokens: 0,
-          cacheReadInputTokens: last.cachedInputTokens ?? last.cacheReadInputTokens ?? 0
-        }
+        const usage = extractCodexUsage(finalTokenUsage)
         if (parsed.peerResponse) {
           parsed.peerResponse.usage = usage
           parsed.peerResponse.metadata = {
@@ -332,12 +334,6 @@ export function createCodexAdapter({
       const { client } = runtimeContext
       const channelKind = clean(item?.request?.params?.metadata?.channelKind).toLowerCase()
 
-      if (hasInboundImages(item)) {
-        const error = new Error('Codex adapter does not support image input yet.')
-        error.code = 400
-        error.detailCode = 'runtime_multimodal_unsupported'
-        throw error
-      }
 
       const threadId = await resolveOrCreateThread(client, conversationKey, {
         ephemeral: channelKind === 'h2a' || channelKind === 'api'
@@ -356,23 +352,12 @@ export function createCodexAdapter({
         prompt,
         {
           label: 'Codex H2A stream turn',
+          images: codexImageInputs(item),
           emitStreamEvent
         }
       )
 
-      let usage = null
-      if (finalTokenUsage) {
-        const last = finalTokenUsage.last || finalTokenUsage.total || {}
-        usage = {
-          runtime: 'codex',
-          usageMode: 'four_tier',
-          accurate: true,
-          inputTokens: last.inputTokens ?? 0,
-          outputTokens: last.outputTokens ?? 0,
-          cacheCreationInputTokens: 0,
-          cacheReadInputTokens: last.cachedInputTokens ?? last.cacheReadInputTokens ?? 0
-        }
-      }
+      const usage = extractCodexUsage(finalTokenUsage)
 
       return {
         parsed: {

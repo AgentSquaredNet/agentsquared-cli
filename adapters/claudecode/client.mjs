@@ -24,7 +24,7 @@ function clean(value) {
 function normalizeSettingSources(value = '') {
   const normalized = clean(value).toLowerCase()
   if (!normalized || normalized === 'none') {
-    return undefined
+    return []
   }
   if (normalized === 'all') {
     return undefined
@@ -150,10 +150,12 @@ export function extractClaudeCodeUsage(resultMessage = null) {
   if (!usage || typeof usage !== 'object') {
     return null
   }
-  const inputTokens = usage.input_tokens ?? usage.inputTokens ?? 0
-  const outputTokens = usage.output_tokens ?? usage.outputTokens ?? 0
-  const cacheCreationInputTokens = usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens ?? 0
-  const cacheReadInputTokens = usage.cache_read_input_tokens ?? usage.cacheReadInputTokens ?? 0
+  const inputTokens = usage.input_tokens
+  const outputTokens = usage.output_tokens
+  const cacheCreationInputTokens = usage.cache_creation_input_tokens ?? 0
+  const cacheReadInputTokens = usage.cache_read_input_tokens ?? 0
+  if (![inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens]
+    .every(value => Number.isSafeInteger(value) && value >= 0)) return null
   return {
     runtime: 'claudecode',
     usageMode: 'four_tier',
@@ -189,7 +191,8 @@ export class ClaudeCodeClient {
     persistSession = true,
     includePartialMessages = false,
     emitDelta = null,
-    outputFormat = null
+    outputFormat = null,
+    images = []
   } = {}) {
     const queryFunction = this.queryImpl || (await import('@anthropic-ai/claude-agent-sdk')).query
     const safeOptions = buildClaudeCodeSafeOptions({
@@ -211,7 +214,10 @@ export class ClaudeCodeClient {
     let resultMessage = null
     try {
       for await (const message of queryFunction({
-        prompt,
+        prompt: images.length ? (async function* () {
+          yield { type: 'user', session_id: resume || '', parent_tool_use_id: null,
+            message: { role: 'user', content: [{ type: 'text', text: prompt }, ...images] } }
+        })() : prompt,
         options: safeOptions.options
       })) {
         sessionId = clean(message?.session_id) || sessionId
@@ -229,6 +235,11 @@ export class ClaudeCodeClient {
       }
     } finally {
       safeOptions.clearTimeout()
+    }
+    if (!resultMessage) throw new Error('Claude Code stream ended without a terminal result')
+    if (resultMessage.subtype !== 'success' || resultMessage.is_error === true) {
+      const details = Array.isArray(resultMessage.errors) ? resultMessage.errors.join('; ') : resultText
+      throw new Error(`Claude Code ${resultMessage.subtype || 'failed'}: ${details || 'execution failed'}`)
     }
     return {
       text: resultText || assistantText,

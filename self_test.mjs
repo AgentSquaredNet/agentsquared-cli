@@ -50,7 +50,7 @@ assertCliSmoke(['--version'], packageJson.version, 'a2-cli --version should prin
 assert(typeof resolveHermesOwnerTarget === 'function', 'Hermes adapter should export owner-route resolver used by CLI')
 assert(SUPPORTED_HOST_RUNTIMES.join(',') === 'codex,claudecode,hermes,openclaw', 'host runtime priority should be codex -> claudecode -> hermes -> openclaw')
 assert(packageJson.dependencies?.['@anthropic-ai/claude-agent-sdk'], 'Claude Agent SDK dependency should be declared')
-assert(packageJson.version === '1.7.1', 'package version should be 1.7.1')
+assert(packageJson.version === '2.0.0', 'package version should be 2.0.0')
 assert(packageJson.dependencies?.ws === '^8.21.0', 'ws dependency should use the audited safe 8.x range')
 assert(assertLoopbackGatewayHost('127.0.0.1') === '127.0.0.1', 'gateway host should allow IPv4 loopback')
 assert(assertLoopbackGatewayHost('localhost') === 'localhost', 'gateway host should allow localhost')
@@ -80,7 +80,7 @@ assert(detachedGatewayArgs.includes('--codex-timeout-ms') && detachedGatewayArgs
 const defaultCodexClient = new CodexClient({ codexPath: '' })
 assert(defaultCodexClient.codexPath === '/Applications/Codex.app/Contents/Resources/codex', 'Codex client should ignore an empty path override and keep the default binary path')
 assert(resolveCodexThreadId({ thread: { id: 'nested_thread_id' } }) === 'nested_thread_id', 'Codex thread id resolver should support app-server thread.id payloads')
-assert(resolveCodexThreadId({ threadId: 'flat_thread_id' }) === 'flat_thread_id', 'Codex thread id resolver should support legacy flat payloads')
+assert(resolveCodexThreadId({ threadId: 'flat_thread_id' }) === '', 'Codex thread id resolver must reject legacy flat payloads')
 
 const multimodalInbound = {
   request: {
@@ -131,7 +131,7 @@ try {
   fs.mkdirSync(fakeBinDir, { recursive: true })
   const fakeClaude = path.join(fakeBinDir, 'claude')
   fs.writeFileSync(fakeClaude, `#!/bin/sh
-if [ "$1" = "--version" ]; then echo "2.1.169"; exit 0; fi
+if [ "$1" = "--version" ]; then echo "2.1.277"; exit 0; fi
 if [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo '{"loggedIn":false}'; exit 1; fi
 exit 1
 `)
@@ -678,7 +678,7 @@ const claudeSafeOptions = buildClaudeCodeSafeOptions({
 })
 try {
   assert(claudeSafeOptions.options.permissionMode === 'dontAsk', 'Claude Code adapter should default to dontAsk permission mode')
-  assert(claudeSafeOptions.options.settingSources === undefined, 'Claude Code adapter should not pass an empty settingSources argument by default')
+  assert(Array.isArray(claudeSafeOptions.options.settingSources) && claudeSafeOptions.options.settingSources.length === 0, 'Claude Code adapter must explicitly disable filesystem settings by default')
   assert(claudeSafeOptions.options.extraArgs?.['safe-mode'] === null, 'Claude Code adapter should enable safe-mode by default')
   assert(claudeSafeOptions.options.tools.includes('Read') && claudeSafeOptions.options.tools.includes('Skill'), 'Claude Code safe tools should include read-only and skill tools')
   assert(CLAUDE_CODE_DENIED_TOOLS.includes('Bash') && CLAUDE_CODE_DENIED_TOOLS.includes('mcp__*'), 'Claude Code denied tools should include Bash and MCP tools')
@@ -791,15 +791,15 @@ try {
     '  } else if (msg.method === "thread/start") {',
     '    write({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: "mock_thread_id" } } });',
     '  } else if (msg.method === "thread/list") {',
-    '    write({ jsonrpc: "2.0", id: msg.id, result: [{ id: "mock_thread_id", name: "agentsquared:test_conv" }] });',
+    '    write({ jsonrpc: "2.0", id: msg.id, result: { data: [{ id: "mock_thread_id", name: "agentsquared:test_conv" }], nextCursor: null } });',
     '  } else if (msg.method === "thread/name/set" || msg.method === "thread/resume") {',
     '    write({ jsonrpc: "2.0", id: msg.id, result: {} });',
     '  } else if (msg.method === "turn/start") {',
-    '    write({ jsonrpc: "2.0", id: msg.id, result: {} });',
+    '    write({ jsonrpc: "2.0", id: msg.id, result: { turn: { id: "turn-1" } } });',
     '    // Send mock stream events',
-    '    write({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: "Codex " } });',
-    '    write({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: "success!" } });',
-    '    write({ jsonrpc: "2.0", method: "turn/completed", params: { turn: { status: "completed" } } });',
+    '    write({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: "mock_thread_id", delta: "Codex " } });',
+    '    write({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: "mock_thread_id", delta: "success!" } });',
+    '    write({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "mock_thread_id", turn: { id: "turn-1", status: "completed" } } });',
     '  }',
     '});'
   ].join('\n'), 'utf8')

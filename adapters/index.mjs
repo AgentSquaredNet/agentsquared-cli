@@ -1,12 +1,18 @@
 import { createOpenClawAdapter, parseOpenClawTaskResult } from './openclaw/adapter.mjs'
-import { detectOpenClawHostEnvironment } from './openclaw/detect.mjs'
+import { detectOpenClawHostEnvironment as detectOpenClawRaw } from './openclaw/detect.mjs'
 import { createHermesAdapter } from './hermes/adapter.mjs'
-import { detectHermesHostEnvironment } from './hermes/detect.mjs'
+import { detectHermesHostEnvironment as detectHermesRaw } from './hermes/detect.mjs'
 import { detectParentRuntimeHint } from './hermes/common.mjs'
 import { createCodexAdapter } from './codex/adapter.mjs'
-import { detectCodexHostEnvironment } from './codex/detect.mjs'
+import { detectCodexHostEnvironment as detectCodexRaw } from './codex/detect.mjs'
 import { createClaudeCodeAdapter } from './claudecode/adapter.mjs'
-import { detectClaudeCodeHostEnvironment } from './claudecode/detect.mjs'
+import { detectClaudeCodeHostEnvironment as detectClaudeCodeRaw } from './claudecode/detect.mjs'
+
+import { withCompatibility, assertRuntimeCompatibility } from '../lib/runtime/compatibility.mjs'
+const detectCodexHostEnvironment = withCompatibility(detectCodexRaw, 'codex', (d, o) => d.codexPath || o.command || 'codex')
+const detectClaudeCodeHostEnvironment = withCompatibility(detectClaudeCodeRaw, 'claudecode', (d, o) => d.claudeCommand || o.command || 'claude')
+const detectHermesHostEnvironment = withCompatibility(detectHermesRaw, 'hermes', (d, o) => d.hermesCommand || o.command || 'hermes')
+const detectOpenClawHostEnvironment = withCompatibility(detectOpenClawRaw, 'openclaw', (d, o) => o.command || 'openclaw')
 
 function clean(value) {
   return `${value ?? ''}`.trim()
@@ -216,29 +222,41 @@ export function createHostRuntimeAdapter({
   claudecode = {}
 } = {}) {
   const normalizedHostRuntime = clean(hostRuntime).toLowerCase() || 'none'
+  const commands = { codex: codex.codexPath || 'codex', claudecode: claudecode.claudeCommand || 'claude', hermes: hermes.command || 'hermes', openclaw: openclaw.command || 'openclaw' }
+  const checked = (adapter) => ({
+    ...adapter,
+    async preflight(...args) {
+      assertRuntimeCompatibility(normalizedHostRuntime, commands[normalizedHostRuntime])
+      return adapter.preflight(...args)
+    },
+    async executeInbound(...args) {
+      assertRuntimeCompatibility(normalizedHostRuntime, commands[normalizedHostRuntime])
+      return adapter.executeInbound(...args)
+    }
+  })
   if (normalizedHostRuntime === 'codex') {
-    return createCodexAdapter({
+    return checked(createCodexAdapter({
       localAgentId,
       ...codex
-    })
+    }))
   }
   if (normalizedHostRuntime === 'claudecode') {
-    return createClaudeCodeAdapter({
+    return checked(createClaudeCodeAdapter({
       localAgentId,
       ...claudecode
-    })
+    }))
   }
   if (normalizedHostRuntime === 'openclaw') {
-    return createOpenClawAdapter({
+    return checked(createOpenClawAdapter({
       localAgentId,
       ...openclaw
-    })
+    }))
   }
   if (normalizedHostRuntime === 'hermes') {
-    return createHermesAdapter({
+    return checked(createHermesAdapter({
       localAgentId,
       ...hermes
-    })
+    }))
   }
   return null
 }

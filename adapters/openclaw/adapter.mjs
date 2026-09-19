@@ -1,8 +1,9 @@
+import { waitForOpenClawRun } from './run.mjs'
 import { withOpenClawGatewayClient } from './ws_client.mjs'
 import { buildConversationSummaryPrompt, normalizeConversationSummary, parseAgentSquaredOutboundEnvelope } from '../../lib/conversation/templates.mjs'
 import { buildInboundPlatformContext } from '../../lib/conversation/platform_context.mjs'
 import { scrubOutboundText } from '../../lib/runtime/safety.mjs'
-import { createInboundAdapterPipeline, defaultInboundText, hasInboundImages } from '../../lib/runtime/adapter_pipeline.mjs'
+import { createInboundAdapterPipeline, defaultInboundText, inboundImageParts } from '../../lib/runtime/adapter_pipeline.mjs'
 import {
   buildOpenClawCombinedPrompt,
   buildOpenClawSafetyPrompt,
@@ -86,14 +87,18 @@ function buildOpenClawH2AStreamPrompt({
   ].filter(Boolean).join('\n\n')
 }
 
-function throwOpenClawMultimodalUnsupported(item = null) {
-  if (!hasInboundImages(item)) {
-    return
-  }
-  const error = new Error('OpenClaw adapter does not support image input yet. Use a text-only request or a runtime with image input support.')
-  error.code = 400
-  error.detailCode = 'runtime_multimodal_unsupported'
-  throw error
+export function openClawImageAttachments(item = null) {
+  return inboundImageParts(item).map(part => {
+    const source = part.source || {}
+    const mimeType = source.mediaType || part.mimeType
+    if (source.type === 'base64' && source.data && ['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(mimeType)) {
+      return { type: 'image', mimeType, content: source.data }
+    }
+    const error = new Error('OpenClaw image input requires a base64 PNG, JPEG, WebP, or GIF')
+    error.code = 400
+    error.detailCode = 'runtime_multimodal_unsupported'
+    throw error
+  })
 }
 
 function openClawEventRunId(event = null) {
@@ -396,10 +401,7 @@ export function createOpenClawAdapter({
       if (!runId) {
         throw new Error('OpenClaw summary call did not return a runId.')
       }
-      const waited = await requestOpenClaw(client, 'agent.wait', {
-        runId,
-        timeoutMs: summaryTimeoutMs
-      }, summaryTimeoutMs + 1000, 'conversation summary wait')
+      const waited = await waitForOpenClawRun(client, runId, summaryTimeoutMs, sessionKey)
       const history = await requestOpenClaw(client, 'chat.history', {
         sessionKey,
         limit: 6
@@ -467,7 +469,6 @@ export function createOpenClawAdapter({
       inboundId
     }) => {
       const { client, gatewayContext } = runtimeContext
-      throwOpenClawMultimodalUnsupported(item)
       const sessionKey = stableId(
         'agentsquared-work',
         localAgentId,
@@ -487,6 +488,7 @@ export function createOpenClawAdapter({
         agentId: agentName,
         sessionKey,
         message: prompt,
+        attachments: openClawImageAttachments(item),
         extraSystemPrompt: OPENCLAW_AGENT_SQUARED_NO_TOOLS_PROMPT,
         idempotencyKey: `agentsquared-agent-${inboundId || randomId('inbound')}`
       }, timeoutMs, 'task agent request', { openclawAgent: agentName, localAgentId })
@@ -495,10 +497,7 @@ export function createOpenClawAdapter({
         throw new Error('OpenClaw agent call did not return a runId.')
       }
 
-      const waited = await requestOpenClaw(client, 'agent.wait', {
-        runId,
-        timeoutMs
-      }, timeoutMs + 1000, 'task agent wait')
+      const waited = await waitForOpenClawRun(client, runId, timeoutMs, sessionKey)
       const status = readOpenClawStatus(waited).toLowerCase()
       if (status && status !== 'ok' && status !== 'completed' && status !== 'done') {
         throw new Error(`OpenClaw agent.wait returned ${status || 'an unknown status'} for run ${runId}.`)
@@ -546,7 +545,6 @@ export function createOpenClawAdapter({
       emitStreamEvent
     }) => {
       const { client, gatewayContext } = runtimeContext
-      throwOpenClawMultimodalUnsupported(item)
       const channelKind = clean(metadata?.channelKind).toLowerCase() === 'api' ? 'api' : 'h2a'
       const sessionKey = stableId(
         `agentsquared-${channelKind}-stream`,
@@ -563,6 +561,7 @@ export function createOpenClawAdapter({
         agentId: agentName,
         sessionKey,
         message: prompt,
+        attachments: openClawImageAttachments(item),
         extraSystemPrompt: OPENCLAW_AGENT_SQUARED_NO_TOOLS_PROMPT,
         idempotencyKey: `agentsquared-${channelKind}-${inboundId || randomId('inbound')}`
       }, timeoutMs, `${channelKind.toUpperCase()} stream agent request`, { openclawAgent: agentName, localAgentId })
@@ -614,10 +613,7 @@ export function createOpenClawAdapter({
       })()
 
       try {
-        const waited = await requestOpenClaw(client, 'agent.wait', {
-          runId,
-          timeoutMs
-        }, timeoutMs + 1000, 'H2A stream agent wait')
+        const waited = await waitForOpenClawRun(client, runId, timeoutMs, sessionKey)
         const status = readOpenClawStatus(waited).toLowerCase()
         if (status && status !== 'ok' && status !== 'completed' && status !== 'done') {
           throw new Error(`OpenClaw agent.wait returned ${status || 'an unknown status'} for run ${runId}.`)
