@@ -91,7 +91,7 @@ class HermesMcpClient {
       capabilities: {},
       clientInfo: {
         name: 'agentsquared-cli',
-        version: '1.6.2'
+        version: '2.0.0'
       }
     })
     this.notify('notifications/initialized', {})

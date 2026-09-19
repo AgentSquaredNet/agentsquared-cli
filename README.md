@@ -62,7 +62,7 @@ to report a supported and ready host runtime.
 
 Requirements:
 
-- Node.js 20 or newer
+- Node.js 24 >=24.16.0 (tested patch: 24.21.0)
 - npm 10 or newer
 - one supported local host runtime
 - official AgentSquared Skills installed in the host runtime's skills directory
@@ -252,3 +252,5 @@ npm run pack:check
 ## License
 
 MIT
+
+See [COMPATIBILITY.md](COMPATIBILITY.md) for the exact supported runtime versions.

@@ -11,9 +11,7 @@ export function resolveCodexThreadId(value = null) {
   }
   return clean(
     value?.id
-    || value?.threadId
     || value?.thread?.id
-    || value?.thread?.threadId
   )
 }
 
@@ -62,7 +60,7 @@ export class CodexClient {
         'stdio://'
       ]
       this.child = spawn(this.codexPath, args, {
-        stdio: ['pipe', 'pipe', 'inherit'],
+        stdio: ['pipe', 'pipe', 'ignore'],
         env: childEnv
       })
     } catch (error) {
@@ -96,6 +94,9 @@ export class CodexClient {
   }
 
   #rejectAllPending(error) {
+    for (const listener of this.eventListeners) {
+      try { listener({ method: 'transport/error', params: { message: error.message } }) } catch {}
+    }
     if (this.pending.size === 0) {
       return
     }
@@ -111,6 +112,23 @@ export class CodexClient {
     try {
       parsed = JSON.parse(line)
     } catch {
+      return
+    }
+
+    if (!parsed || typeof parsed !== 'object') return
+    // Server request IDs live in an independent namespace from client IDs.
+    if (typeof parsed.method === 'string' && parsed.id != null) {
+      const result = {
+        'item/commandExecution/requestApproval': { decision: 'decline' },
+        'item/fileChange/requestApproval': { decision: 'decline' },
+        'item/permissions/requestApproval': { permissions: {}, scope: 'turn' },
+        'item/tool/requestUserInput': { answers: {} },
+        'mcpServer/elicitation/request': { action: 'decline' }
+      }[parsed.method]
+      const reply = result
+        ? { id: parsed.id, result }
+        : { id: parsed.id, error: { code: -32601, message: `Unsupported server request: ${parsed.method}` } }
+      this.child?.stdin?.write(JSON.stringify(reply) + '\n')
       return
     }
 
@@ -171,7 +189,6 @@ export class CodexClient {
 
       this.pending.set(id, { resolve, reject, timer })
       this.child.stdin.write(JSON.stringify({
-        jsonrpc: '2.0',
         id,
         method,
         params
@@ -187,7 +204,6 @@ export class CodexClient {
     }
 
     this.child.stdin.write(JSON.stringify({
-      jsonrpc: '2.0',
       method,
       params
     }) + '\n')
@@ -198,7 +214,7 @@ export class CodexClient {
     const hello = await this.#sendRequest('initialize', {
       clientInfo: {
         name: 'AgentSquaredCodexClient',
-        version: '1.6.15'
+        version: '2.0.0'
       },
       capabilities: {}
     }, handshakeTimeout)
@@ -217,8 +233,8 @@ export class CodexClient {
     }
   }
 
-  async threadList(limit = 20) {
-    return this.#sendRequest('thread/list', { limit })
+  async threadList(limit = 20, cursor = null, searchTerm = null) {
+    return this.#sendRequest('thread/list', { limit, cursor, searchTerm })
   }
 
   async threadStart(options = {}) {
@@ -240,14 +256,20 @@ export class CodexClient {
     })
   }
 
-  async turnStart(threadId, promptText) {
+  async turnInterrupt(threadId, turnId) {
+    return this.#sendRequest('turn/interrupt', { threadId, turnId })
+  }
+
+  async turnStart(threadId, promptText, images = []) {
     return this.#sendRequest('turn/start', {
       threadId: clean(threadId),
       input: [
         {
           type: 'text',
-          text: promptText
-        }
+          text: promptText,
+          text_elements: []
+        },
+        ...images
       ]
     })
   }
@@ -266,6 +288,7 @@ export class CodexClient {
     let unsubscribe = () => {}
     let timer = null
     let settled = false
+    let turnId = null
     function cleanup() {
       if (settled) {
         return
@@ -277,17 +300,20 @@ export class CodexClient {
     const completed = new Promise((resolve, reject) => {
       timer = setTimeout(() => {
         cleanup()
+        if (turnId) void this.turnInterrupt(threadId, turnId).catch(() => {})
         reject(new Error(`Codex smoke turn timed out after ${timeoutMs}ms`))
       }, Math.max(1000, timeoutMs))
 
       unsubscribe = this.onEvent((event) => {
+        if (event.method === 'transport/error') { cleanup(); reject(new Error(event.params.message)); return }
+        if (event.params?.threadId !== threadId) return
         if (event.method === 'item/agentMessage/delta') {
           text += event.params?.delta || event.params?.contentDelta || ''
         }
         if (event.method === 'turn/completed') {
           cleanup()
           const status = clean(event.params?.turn?.status)
-          if (status === 'failed') {
+          if (status !== 'completed') {
             reject(new Error(event.params?.turn?.error?.message || 'Codex smoke turn failed'))
           } else {
             resolve({ threadId, text })
@@ -297,8 +323,10 @@ export class CodexClient {
     })
 
     try {
-      await this.turnStart(threadId, prompt)
-      return await completed
+      const [, result] = await Promise.all([
+        this.turnStart(threadId, prompt).then(started => { turnId = started.turn.id }), completed
+      ])
+      return result
     } catch (error) {
       cleanup()
       throw error

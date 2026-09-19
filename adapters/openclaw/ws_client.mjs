@@ -3,10 +3,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { WebSocket } from 'ws'
+import { GatewayClient } from '@openclaw/gateway-client'
+import { PROTOCOL_VERSION } from '@openclaw/gateway-protocol/version'
 import { runOpenClawCli } from './cli.mjs'
 
-const PROTOCOL_VERSION = 3
 const DEFAULT_GATEWAY_URL = 'ws://127.0.0.1:18789'
 const DEFAULT_CONNECT_TIMEOUT_MS = 15000
 const DEFAULT_REQUEST_TIMEOUT_MS = 180000
@@ -117,33 +117,6 @@ function signDevicePayload(privateKeyPem, payload) {
 
 function publicKeyRawBase64UrlFromPem(publicKeyPem) {
   return base64UrlEncode(ed25519PublicKeyRaw(publicKeyPem))
-}
-
-function buildDeviceAuthPayloadV3({
-  deviceId,
-  clientId,
-  clientMode,
-  role,
-  scopes,
-  signedAtMs,
-  token,
-  nonce,
-  platform,
-  deviceFamily
-}) {
-  return [
-    'v3',
-    clean(deviceId),
-    clean(clientId),
-    clean(clientMode),
-    clean(role),
-    (Array.isArray(scopes) ? scopes : []).map((scope) => clean(scope)).filter(Boolean).join(','),
-    String(signedAtMs),
-    clean(token),
-    clean(nonce),
-    clean(platform),
-    clean(deviceFamily)
-  ].join('|')
 }
 
 function authStorePath(stateDir) {
@@ -373,13 +346,15 @@ function toRequestError(error) {
 }
 
 async function approveLatestPairing({
+  requestId,
   command = 'openclaw',
   cwd = '',
   gatewayUrl = '',
   gatewayToken = '',
   gatewayPassword = ''
 } = {}) {
-  const args = ['devices', 'approve', '--latest', '--json']
+  if (!clean(requestId)) throw new Error('OpenClaw pairing requires a specific request ID; approve this device explicitly.')
+  const args = ['devices', 'approve', clean(requestId), '--json']
   if (clean(gatewayUrl)) {
     args.push('--url', clean(gatewayUrl))
     if (clean(gatewayToken)) {
@@ -393,323 +368,79 @@ async function approveLatestPairing({
     cwd,
     timeoutMs: 20000
   })
-  return result.stdout ? (parseOpenClawJson(result.stdout) || parseJson(result.stdout, 'OpenClaw devices approve response')) : {}
+  return { approved: true }
 }
 
-class OpenClawGatewayWsSession {
-  constructor({
-    url,
-    gatewayToken = '',
-    gatewayPassword = '',
-    stateDir,
-    clientId = DEFAULT_CLIENT_ID,
-    clientVersion = 'agentsquared',
-    clientMode = DEFAULT_CLIENT_MODE,
-    role = DEFAULT_ROLE,
-    scopes = DEFAULT_SCOPES,
+export class OpenClawGatewayWsSession {
+  constructor({ url, gatewayToken = '', gatewayPassword = '', stateDir,
     connectTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
-    requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
-    deviceFamily = DEFAULT_DEVICE_FAMILY
-  }) {
-    this.url = clean(url) || DEFAULT_GATEWAY_URL
-    this.gatewayToken = clean(gatewayToken)
-    this.gatewayPassword = clean(gatewayPassword)
-    this.stateDir = stateDir
-    this.clientId = clean(clientId) || DEFAULT_CLIENT_ID
-    this.clientVersion = clean(clientVersion) || 'agentsquared'
-    this.clientMode = clean(clientMode) || DEFAULT_CLIENT_MODE
-    this.role = clean(role) || DEFAULT_ROLE
-    this.scopes = Array.isArray(scopes) ? scopes.map((scope) => clean(scope)).filter(Boolean) : [...DEFAULT_SCOPES]
-    this.connectTimeoutMs = Math.max(1000, connectTimeoutMs)
-    this.requestTimeoutMs = Math.max(1000, requestTimeoutMs)
-    this.deviceFamily = clean(deviceFamily) || DEFAULT_DEVICE_FAMILY
-    this.identity = loadOrCreateDeviceIdentity(identityPath(stateDir))
-    this.ws = null
-    this.pending = new Map()
-    this.connected = false
-    this.connectionPromise = null
-    this.connectChallengeNonce = ''
-    this.connectChallengeError = null
-    this.connectChallengeResolve = null
-    this.connectChallengeReject = null
+    requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS }) {
     this.eventListeners = new Set()
+    this.connectTimeoutMs = connectTimeoutMs
+    this.connectionPromise = null
+    this.connected = false
+    const check = (params) => {
+      params.signal?.throwIfAborted()
+      params.assertCurrent?.()
+      const token = loadStoredDeviceToken(stateDir, params)?.token ?? null
+      return params.expectedToken === undefined || params.expectedToken === token
+    }
+    this.client = new GatewayClient({
+      url, token: gatewayToken || undefined, password: gatewayPassword || undefined,
+      minProtocol: PROTOCOL_VERSION, maxProtocol: PROTOCOL_VERSION,
+      clientName: DEFAULT_CLIENT_ID, mode: DEFAULT_CLIENT_MODE,
+      clientVersion: '2.0.0', deviceFamily: DEFAULT_DEVICE_FAMILY,
+      role: DEFAULT_ROLE, scopes: [...DEFAULT_SCOPES], requestTimeoutMs,
+      connectChallengeTimeoutMs: connectTimeoutMs,
+      deviceIdentity: loadOrCreateDeviceIdentity(identityPath(stateDir)),
+      hostDeps: {
+        signDevicePayload, publicKeyRawBase64UrlFromPem,
+        loadDeviceAuthToken: (params) => {
+          params.signal?.throwIfAborted()
+          params.assertCurrent?.()
+          return loadStoredDeviceToken(stateDir, params)
+        },
+        storeDeviceAuthToken: (params) => { if (check(params)) storeDeviceToken(stateDir, params) },
+        clearDeviceAuthToken: (params) => { if (check(params)) clearDeviceToken(stateDir, params) }
+      },
+      onHelloOk: (hello) => { this.connected = true; this.resolveConnect?.(hello) },
+      onConnectError: (error) => this.rejectConnect?.(error),
+      onClose: () => { this.connected = false },
+      onEvent: (event) => {
+        for (const listener of this.eventListeners) {
+          try { listener(event) } catch { /* observer isolation */ }
+        }
+      }
+    })
   }
 
   async connect() {
-    if (this.connected && this.ws?.readyState === WebSocket.OPEN) {
-      return
-    }
-    if (this.connectionPromise) {
-      return this.connectionPromise
-    }
-    this.connectionPromise = this.#connectInternal()
-    try {
-      await this.connectionPromise
-    } finally {
-      this.connectionPromise = null
-    }
-  }
-
-  async #connectInternal() {
-    const ws = new WebSocket(this.url)
-    this.ws = ws
-    ws.on('message', (chunk) => this.#handleMessage(chunk.toString()))
-    ws.on('close', (code, reasonBuffer) => {
-      this.connected = false
-      const reason = Buffer.isBuffer(reasonBuffer) ? reasonBuffer.toString('utf8') : `${reasonBuffer ?? ''}`
-      if (this.pending.size === 0) {
-        return
-      }
-      const error = new Error(`OpenClaw gateway closed (${code}): ${clean(reason) || 'no close reason'}`)
-      for (const [id, pending] of this.pending.entries()) {
-        clearTimeout(pending.timer)
-        pending.reject(error)
-        this.pending.delete(id)
-      }
+    if (this.connected) return
+    if (this.connectionPromise) return this.connectionPromise
+    this.connectionPromise = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('OpenClaw gateway connection timed out')), this.connectTimeoutMs)
+      this.resolveConnect = (hello) => { clearTimeout(timer); resolve(hello) }
+      this.rejectConnect = (error) => { clearTimeout(timer); reject(error) }
+      this.client.start()
     })
-
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`OpenClaw gateway open timed out after ${this.connectTimeoutMs}ms`))
-      }, this.connectTimeoutMs)
-      ws.once('open', () => {
-        clearTimeout(timer)
-        resolve(true)
-      })
-      ws.once('error', (error) => {
-        clearTimeout(timer)
-        reject(error)
-      })
-    })
-
-    const nonce = await this.#waitForConnectChallenge()
-    const connectId = randomId()
-    const connectParams = this.#buildConnectParams(nonce)
-    const hello = await this.#sendRequest(connectId, 'connect', connectParams, this.connectTimeoutMs)
-    this.connected = true
-    const issuedDeviceToken = clean(hello?.auth?.deviceToken)
-    if (issuedDeviceToken) {
-      storeDeviceToken(this.stateDir, {
-        deviceId: this.identity.deviceId,
-        role: clean(hello?.auth?.role) || this.role,
-        token: issuedDeviceToken,
-        scopes: Array.isArray(hello?.auth?.scopes) ? hello.auth.scopes : this.scopes
-      })
-    }
+    try { return await this.connectionPromise }
+    catch (error) { await this.close(); throw error }
+    finally { this.connectionPromise = null }
   }
 
-  async #waitForConnectChallenge() {
-    if (clean(this.connectChallengeNonce)) {
-      const nonce = this.connectChallengeNonce
-      this.connectChallengeNonce = ''
-      return nonce
-    }
-    if (this.connectChallengeError) {
-      const error = this.connectChallengeError
-      this.connectChallengeError = null
-      throw error
-    }
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`OpenClaw connect challenge timed out after ${this.connectTimeoutMs}ms`))
-      }, this.connectTimeoutMs)
-      this.connectChallengeResolve = (nonce) => {
-        clearTimeout(timer)
-        resolve(nonce)
-      }
-      this.connectChallengeReject = (error) => {
-        clearTimeout(timer)
-        reject(error)
-      }
-    })
-  }
-
-  #selectAuth() {
-    const storedToken = loadStoredDeviceToken(this.stateDir, {
-      deviceId: this.identity.deviceId,
-      role: this.role
-    })
-    if (clean(storedToken?.token) && !this.gatewayPassword) {
-      return {
-        authToken: this.gatewayToken || clean(storedToken.token),
-        authDeviceToken: this.gatewayToken ? clean(storedToken.token) : '',
-        signatureToken: this.gatewayToken || clean(storedToken.token),
-        usingStoredDeviceToken: true
-      }
-    }
-    return {
-      authToken: this.gatewayToken,
-      authDeviceToken: '',
-      authPassword: this.gatewayPassword,
-      signatureToken: this.gatewayToken,
-      usingStoredDeviceToken: false
-    }
-  }
-
-  #buildConnectParams(nonce) {
-    const selected = this.#selectAuth()
-    const signedAtMs = Date.now()
-    const payload = buildDeviceAuthPayloadV3({
-      deviceId: this.identity.deviceId,
-      clientId: this.clientId,
-      clientMode: this.clientMode,
-      role: this.role,
-      scopes: this.scopes,
-      signedAtMs,
-      token: selected.signatureToken || null,
-      nonce,
-      platform: process.platform,
-      deviceFamily: this.deviceFamily
-    })
-    return {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: this.clientId,
-        version: this.clientVersion,
-        platform: process.platform,
-        deviceFamily: this.deviceFamily,
-        mode: this.clientMode
-      },
-      role: this.role,
-      scopes: this.scopes,
-      caps: [],
-      commands: [],
-      auth: (selected.authToken || selected.authDeviceToken || selected.authPassword)
-        ? {
-            token: selected.authToken || undefined,
-            deviceToken: selected.authDeviceToken || undefined,
-            password: selected.authPassword || undefined
-          }
-        : undefined,
-      device: {
-        id: this.identity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(this.identity.publicKeyPem),
-        signature: signDevicePayload(this.identity.privateKeyPem, payload),
-        signedAt: signedAtMs,
-        nonce
-      }
-    }
-  }
-
-  #handleMessage(raw) {
-    let parsed
-    try {
-      parsed = JSON.parse(raw)
-    } catch {
-      return
-    }
-    if (parsed?.type === 'event' && parsed.event === 'connect.challenge') {
-      const nonce = clean(parsed?.payload?.nonce)
-      if (!nonce) {
-        const error = new Error('OpenClaw gateway connect challenge was missing a nonce.')
-        if (this.connectChallengeReject) {
-          this.connectChallengeReject(error)
-        } else {
-          this.connectChallengeError = error
-        }
-        return
-      }
-      if (this.connectChallengeResolve) {
-        this.connectChallengeResolve(nonce)
-        this.connectChallengeResolve = null
-        this.connectChallengeReject = null
-      } else {
-        this.connectChallengeNonce = nonce
-      }
-      return
-    }
-    if (parsed?.type === 'event') {
-      for (const listener of this.eventListeners) {
-        try {
-          listener(parsed)
-        } catch {
-          // Event listeners are best-effort observers and must not break RPC.
-        }
-      }
-      return
-    }
-    if (parsed?.type === 'res' && clean(parsed.id)) {
-      const pending = this.pending.get(clean(parsed.id))
-      if (!pending) {
-        return
-      }
-      clearTimeout(pending.timer)
-      this.pending.delete(clean(parsed.id))
-      if (parsed.ok) {
-        pending.resolve(parsed.payload ?? null)
-        return
-      }
-      pending.reject(toRequestError(parsed.error ?? { message: 'OpenClaw request failed' }))
-    }
-  }
-
-  async #sendRequest(id, method, params, timeoutMs) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error('OpenClaw gateway socket is not open.')
-    }
-    const result = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id)
-        reject(new Error(`OpenClaw ${method} timed out after ${timeoutMs}ms`))
-      }, timeoutMs)
-      this.pending.set(id, { resolve, reject, timer })
-      this.ws.send(JSON.stringify({
-        type: 'req',
-        id,
-        method,
-        params
-      }))
-    })
-    return result
-  }
-
-  async request(method, params = {}, timeoutMs = this.requestTimeoutMs) {
+  async request(method, params = {}, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS) {
     await this.connect()
-    return this.#sendRequest(randomId(), clean(method), params, timeoutMs)
+    return this.client.request(method, params, { timeoutMs })
   }
 
   onEvent(listener) {
-    if (typeof listener !== 'function') {
-      return () => {}
-    }
     this.eventListeners.add(listener)
-    return () => {
-      this.eventListeners.delete(listener)
-    }
+    return () => this.eventListeners.delete(listener)
   }
 
   async close() {
-    const ws = this.ws
-    this.ws = null
     this.connected = false
-    if (!ws) {
-      return
-    }
-    await new Promise((resolve) => {
-      if (ws.readyState === WebSocket.CLOSED) {
-        resolve(true)
-        return
-      }
-      const timer = setTimeout(() => {
-        try {
-          ws.terminate()
-        } catch {
-          // ignore
-        }
-        resolve(true)
-      }, 500)
-      ws.once('close', () => {
-        clearTimeout(timer)
-        resolve(true)
-      })
-      try {
-        ws.close(1000, 'normal closure')
-      } catch {
-        clearTimeout(timer)
-        resolve(true)
-      }
-    })
+    await this.client.stopAndWait()
   }
 }
 
@@ -740,6 +471,7 @@ export async function withOpenClawGatewayClient(options, fn) {
       throw error
     }
     await approveLatestPairing({
+      requestId: error?.details?.requestId,
       command: options?.command,
       cwd: options?.cwd,
       gatewayUrl: clean(bootstrap.gatewayUrl),

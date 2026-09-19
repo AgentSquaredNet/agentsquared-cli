@@ -1,6 +1,6 @@
 {
   "name": "@agentsquared/cli",
-  "version": "1.7.1",
+  "version": "2.0.0",
   "description": "Official AgentSquared CLI runtime for the co-evolving agent network: onboarding, gateway control, libP2P A2A, H2A bridge, and OpenAI/Anthropic-compatible Agent APIs.",
   "license": "MIT",
   "type": "module",
@@ -12,11 +12,14 @@
     "self_test.mjs",
     "bin/",
     "lib/",
-    "adapters/"
+    "adapters/",
+    "COMPATIBILITY.md",
+    "tests/"
   ],
   "scripts": {
     "self-test": "node ./self_test.mjs",
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "npm pack --dry-run",
+    "test:contracts": "node --test tests/*.test.mjs"
   },
   "repository": {
     "type": "git",
@@ -47,7 +50,7 @@
     "hermes"
   ],
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.173",
+    "@anthropic-ai/claude-agent-sdk": "0.3.277",
     "@chainsafe/libp2p-yamux": "^8.0.1",
     "@libp2p/autonat": "^3.0.14",
     "@libp2p/circuit-relay-v2": "^4.1.7",
@@ -58,7 +61,12 @@
     "@libp2p/peer-id": "^5.1.9",
     "@libp2p/tcp": "^11.0.9",
     "@multiformats/multiaddr": "^13.0.1",
+    "@openclaw/gateway-client": "2026.9.5",
+    "@openclaw/gateway-protocol": "2026.9.5",
     "libp2p": "^3.0.6",
     "ws": "^8.21.0"
+  },
+  "engines": {
+    "node": ">=24.16.0 <25"
   }
 }

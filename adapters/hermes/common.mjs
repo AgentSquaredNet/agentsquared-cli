@@ -127,13 +127,12 @@ function looksLikeHermesProjectRoot(dirPath = '') {
 
 function resolveCommandPath(command = 'hermes') {
   const normalized = clean(command) || 'hermes'
-  if (normalized.includes(path.sep)) {
-    return existingPath(normalized)
-  }
-  const result = spawnSync('sh', ['-lc', `command -v ${JSON.stringify(normalized)}`], {
-    encoding: 'utf8'
-  })
-  return existingPath(clean(result.stdout).split(/\r?\n/).find(Boolean))
+  const candidates = normalized.includes(path.sep) ? [resolveUserPath(normalized)]
+    : (process.env.PATH || '').split(path.delimiter).map(dir => path.join(dir, normalized))
+  return candidates.find(candidate => {
+    try { fs.accessSync(candidate, fs.constants.X_OK); return fs.statSync(candidate).isFile() }
+    catch { return false }
+  }) || ''
 }
 
 function hermesPythonFromCommand(command = 'hermes') {
@@ -289,19 +288,7 @@ export function detectHermesServiceMode(hermesHome = '') {
   }
 }
 
-function shellCommandExists(command = '') {
-  const normalized = clean(command)
-  if (!normalized) {
-    return false
-  }
-  if (normalized.includes(path.sep)) {
-    return fs.existsSync(resolveUserPath(normalized))
-  }
-  const result = spawnSync('sh', ['-lc', `command -v "${normalized.replace(/"/g, '\\"')}"`], {
-    stdio: 'ignore'
-  })
-  return result.status === 0
-}
+function shellCommandExists(command = '') { return Boolean(clean(command) && resolveCommandPath(command)) }
 
 export function detectParentRuntimeHint() {
   let pid = process.ppid
