@@ -258,7 +258,7 @@ export async function checkHermesApiServerHealth({
         capabilities
       }
     }
-    if (['responses_api', 'run_status', 'run_events_sse', 'run_stop'].some((key) => capabilities.payload?.features?.[key] !== true)) {
+    if (['responses_api', 'run_submission', 'run_status', 'run_events_sse', 'run_stop'].some((key) => capabilities.payload?.features?.[key] !== true)) {
       return {
         ok: false,
         apiBase: resolvedBase,

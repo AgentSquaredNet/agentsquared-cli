@@ -9,7 +9,7 @@ import { buildHermesProcessEnv } from './common.mjs'
 import { detectHermesHostEnvironment } from './detect.mjs'
 import { readHermesEnv } from './env.mjs'
 import { ensureHermesApiServerEnv } from './env.mjs'
-import { probeHermesMcp, resolveHermesOwnerTargetViaMcp, sendHermesOwnerMessageViaMcp } from './mcp_client.mjs'
+import { resolveHermesOwnerTargetViaMcp, sendHermesOwnerMessageViaMcp } from './mcp_client.mjs'
 import {
   buildHermesCombinedPrompt,
   hermesConversationName,
@@ -314,19 +314,10 @@ export function createHermesAdapter({
     }
     const envResult = ensureHermesApiServerEnv(detection.hermesHome)
     let latest = await detectCurrent()
-    const mcpProbe = await probeHermesMcp({
-      command: latest.hermesCommand || command,
-      hermesHome: latest.hermesHome,
-      timeoutMs: 10000
-    })
-    if (latest.apiServerHealthy && mcpProbe.ok && !envResult.changed) {
-      return {
-        ok: true,
-        mode: 'hermes',
-        detection: latest,
-        envConfigured: envResult.changed,
-        mcp: mcpProbe
-      }
+    // Responses/Runs execution is authenticated and capability-checked by detectCurrent.
+    // MCP is an optional owner-notification auxiliary, not an execution dependency.
+    if (latest.apiServerHealthy && !envResult.changed) {
+      return { ok: true, mode: 'hermes', detection: latest, envConfigured: false }
     }
     if (latest.gatewayServiceInstalled) {
       const restart = runHermesGatewayService(command, {
@@ -356,27 +347,12 @@ export function createHermesAdapter({
       })
       if (health.ok) {
         latest = await detectCurrent()
-        const restartedMcpProbe = await probeHermesMcp({
-          command: latest.hermesCommand || command,
-          hermesHome: latest.hermesHome,
-          timeoutMs: 10000
-        })
-        if (!restartedMcpProbe.ok) {
-          return {
-            ok: false,
-            mode: 'hermes',
-            error: `Hermes API server is healthy, but Hermes MCP server is not available: ${restartedMcpProbe.reason}`,
-            detection: latest,
-            mcp: restartedMcpProbe
-          }
-        }
         return {
           ok: true,
           mode: 'hermes',
           detection: latest,
           envConfigured: envResult.changed,
-          serviceRestarted: true,
-          mcp: restartedMcpProbe
+          serviceRestarted: true
         }
       }
       return {
@@ -389,10 +365,9 @@ export function createHermesAdapter({
       ok: false,
       mode: 'hermes',
       error: latest.apiServerHealthy
-        ? `Hermes API server is healthy, but Hermes MCP server is not available: ${mcpProbe.reason}`
+        ? 'Hermes API configuration changed. Restart the managed Hermes API service, then retry.'
         : 'Hermes API server is not healthy and no managed Hermes gateway service is installed. AgentSquared has written the required Hermes .env values. Start Hermes gateway manually, then retry.',
-      detection: latest,
-      mcp: mcpProbe
+      detection: latest
     }
   }
 
